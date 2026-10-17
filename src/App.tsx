@@ -4,7 +4,7 @@
  */
 
 import { useState, useEffect } from 'react';
-import { Wallet, Trophy, MessageSquare, Download, ExternalLink, Shield, ArrowRight, Eye, EyeOff } from 'lucide-react';
+import { Wallet, Trophy, MessageSquare, Download, ExternalLink } from 'lucide-react';
 import { BoostPayStore } from './services/store';
 import { User, SystemConfig } from './types';
 import { Navbar } from './components/Navbar';
@@ -19,16 +19,13 @@ import { usePWAInstall } from './hooks/usePWAInstall';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(() => BoostPayStore.getCurrentUser());
-  const [isAdminLoggedIn, setIsAdminLoggedIn] = useState<boolean>(false);
-  const [isOnAdminRoute, setIsOnAdminRoute] = useState<boolean>(false);
+  const [isOnAdminRoute, setIsOnAdminRoute] = useState<boolean>(() => {
+    const path = window.location.pathname.toLowerCase();
+    const hash = window.location.hash.toLowerCase();
+    return path === '/admin' || path.startsWith('/admin/') || hash === '#/admin' || hash === '#admin';
+  });
   const [activeTab, setActiveTab] = useState<'WALLET' | 'LEADERBOARD' | 'MESSENGER'>('WALLET');
   const [chatTargetPeerId, setChatTargetPeerId] = useState<string | null>(null);
-
-  // Admin login form states for /admin route
-  const [adminEmail, setAdminEmail] = useState('');
-  const [adminPass, setAdminPass] = useState('');
-  const [showAdminPass, setShowAdminPass] = useState(false);
-  const [adminError, setAdminError] = useState('');
 
   // Modals state
   const [isSendMoneyOpen, setIsSendMoneyOpen] = useState(false);
@@ -71,20 +68,9 @@ export default function App() {
     };
   }, []);
 
-  const handleAdminSignIn = (e: React.FormEvent) => {
-    e.preventDefault();
-    setAdminError('');
-    if (adminEmail.trim().toLowerCase() === 'admin@gmail.com' && adminPass === '123456') {
-      setIsAdminLoggedIn(true);
-    } else {
-      setAdminError('Invalid administrator credentials.');
-    }
-  };
-
   const handleExitAdmin = () => {
-    setIsAdminLoggedIn(false);
     setIsOnAdminRoute(false);
-    if (window.location.pathname === '/admin') {
+    if (window.location.pathname.startsWith('/admin')) {
       window.history.pushState({}, '', '/');
     }
     if (window.location.hash.includes('admin')) {
@@ -92,17 +78,23 @@ export default function App() {
     }
   };
 
+  const handleEnterAdmin = () => {
+    setIsOnAdminRoute(true);
+    if (!window.location.pathname.startsWith('/admin')) {
+      window.history.pushState({}, '', '/admin');
+    }
+  };
+
   const handleLogout = () => {
     BoostPayStore.setCurrentUser(null);
     setCurrentUser(null);
-    setIsAdminLoggedIn(false);
     setActiveTab('WALLET');
     setChatTargetPeerId(null);
   };
 
   const handleUserLogin = (user: User) => {
+    BoostPayStore.setCurrentUser(user);
     setCurrentUser(user);
-    setIsAdminLoggedIn(false);
     setActiveTab('WALLET');
   };
 
@@ -113,99 +105,22 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col font-sans antialiased">
-      {/* 1. DEDICATED ADMIN ROUTE (/admin) */}
+      {/* 1. COMPLETELY INDEPENDENT FULL-STACK ADMIN PORTAL (/admin or #admin) */}
       {isOnAdminRoute ? (
-        isAdminLoggedIn ? (
-          <div className="flex-1 flex flex-col">
-            <Navbar
-              user={null}
-              isAdmin={true}
-              onLogout={handleExitAdmin}
-            />
-            <main className="flex-1 pb-12 overflow-y-auto">
-              <AdminPortal onBack={handleExitAdmin} />
-            </main>
-          </div>
-        ) : (
-          <div className="flex-1 flex flex-col justify-center items-center px-4 py-12">
-            <div className="w-full max-w-md">
-              <div className="text-center mb-6">
-                <div className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-500/20 text-amber-400 mb-2">
-                  <Shield className="w-6 h-6" />
-                </div>
-                <h2 className="text-lg font-bold text-white">Administrator Portal</h2>
-                <p className="text-xs text-zinc-400">Restricted system access</p>
-              </div>
-
-              <div className="rounded-3xl border border-zinc-800 bg-zinc-900/90 p-6 shadow-2xl">
-                <form onSubmit={handleAdminSignIn} className="space-y-4">
-                  <div>
-                    <label className="block text-xs font-medium text-zinc-400 mb-1">
-                      Admin Email
-                    </label>
-                    <input
-                      type="email"
-                      required
-                      value={adminEmail}
-                      onChange={(e) => setAdminEmail(e.target.value)}
-                      placeholder="admin@gmail.com"
-                      className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3.5 py-2.5 text-xs text-zinc-100 focus:border-amber-500 focus:outline-none"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-medium text-zinc-400 mb-1">
-                      Admin Password
-                    </label>
-                    <div className="relative">
-                      <input
-                        type={showAdminPass ? 'text' : 'password'}
-                        required
-                        value={adminPass}
-                        onChange={(e) => setAdminPass(e.target.value)}
-                        placeholder="••••••"
-                        className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3.5 py-2.5 text-xs text-zinc-100 focus:border-amber-500 focus:outline-none pr-10"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowAdminPass(!showAdminPass)}
-                        className="absolute right-3 top-2.5 text-zinc-500 hover:text-zinc-300 cursor-pointer"
-                      >
-                        {showAdminPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                      </button>
-                    </div>
-                  </div>
-
-                  {adminError && (
-                    <p className="text-xs text-red-400 bg-red-950/40 p-2.5 rounded-xl border border-red-500/30">
-                      {adminError}
-                    </p>
-                  )}
-
-                  <button
-                    type="submit"
-                    className="w-full h-11 rounded-xl bg-amber-500 text-xs font-bold text-zinc-950 hover:bg-amber-400 transition flex items-center justify-center gap-1.5 cursor-pointer shadow-md shadow-amber-500/20"
-                  >
-                    Authenticate as Administrator <ArrowRight className="w-4 h-4" />
-                  </button>
-
-                  <div className="text-center pt-2">
-                    <button
-                      type="button"
-                      onClick={handleExitAdmin}
-                      className="text-xs text-zinc-500 hover:text-zinc-300 cursor-pointer"
-                    >
-                      Return to User Wallet
-                    </button>
-                  </div>
-                </form>
-              </div>
-            </div>
-          </div>
-        )
+        <AdminPortal onBack={handleExitAdmin} />
       ) : !currentUser ? (
         /* 2. AUTHENTICATION GATE */
-        <AuthGate onLoginUser={handleUserLogin} />
+        <div className="flex-1 flex flex-col justify-between">
+          <AuthGate onLoginUser={handleUserLogin} />
+          <div className="text-center pb-6">
+            <button
+              onClick={handleEnterAdmin}
+              className="text-zinc-500 hover:text-amber-400 font-mono text-xs transition cursor-pointer"
+            >
+              Administrator Console Portal →
+            </button>
+          </div>
+        </div>
       ) : (
         /* 3. LOGGED-IN MAIN USER INTERFACE */
         <div className="flex-1 flex flex-col max-w-md w-full mx-auto pb-20">
@@ -323,6 +238,9 @@ export default function App() {
           }}
         />
       )}
+
+      {/* Gentle Update / Deployment Available Notification */}
+      <UpdateNotification />
     </div>
   );
 }

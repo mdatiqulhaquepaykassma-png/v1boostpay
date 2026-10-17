@@ -4,10 +4,33 @@ import { copyToClipboard as clipboardHelper } from '../utils/clipboard';
 const STORAGE_USERS = 'boostpay_users_v4';
 const STORAGE_CURRENT_USER = 'boostpay_current_user_v4';
 const STORAGE_CURRENT_USER_ID = 'boostpay_current_user_id_v4';
+const STORAGE_ADMIN_SESSION = 'boostpay_admin_session_v4';
 const STORAGE_TRANSACTIONS = 'boostpay_transactions_v4';
 const STORAGE_CONVERSATIONS = 'boostpay_conversations_v4';
 const STORAGE_MESSAGES = 'boostpay_messages_v4';
 const STORAGE_CONFIG = 'boostpay_config_v4';
+
+// Legacy keys for seamless migration and zero-logout upgrade
+const LEGACY_USER_KEYS = [
+  'boostpay_current_user_v4',
+  'boostpay_current_user',
+  'boostpay_auth_user',
+  'boostpay_user',
+  'boostpay_current_user_v3'
+];
+
+const LEGACY_USER_ID_KEYS = [
+  'boostpay_current_user_id_v4',
+  'boostpay_current_user_id',
+  'boostpay_user_id'
+];
+
+export interface AdminSession {
+  isLoggedIn: boolean;
+  email: string;
+  token: string;
+  loginTime: number;
+}
 
 export const MNEMONIC_WORDS = [
   'alpha', 'beacon', 'crypto', 'dynamic', 'ember', 'falcon',
@@ -68,19 +91,49 @@ export class BoostPayStore {
       if (res.ok) {
         const data = await res.json();
         
-        // Smart merge users
+        // Smart non-destructive merge users
         if (data.users && Array.isArray(data.users)) {
           const localUsers = this.getUsers();
-          const merged = [...data.users];
+          const mergedMap = new Map<string, User>();
 
-          // Preserve any local user not yet on backend
+          // 1. Populate with server users
+          for (const serverU of data.users) {
+            mergedMap.set(serverU.id, serverU);
+          }
+
+          // 2. Intelligently merge local users (preserve secrets, credentials & higher balances)
           for (const localU of localUsers) {
-            const exists = merged.some(u => u.id === localU.id);
-            if (!exists) {
-              merged.push(localU);
+            if (mergedMap.has(localU.id)) {
+              const serverU = mergedMap.get(localU.id)!;
+              const mergedUser: User = {
+                ...serverU,
+                phrase: localU.phrase || serverU.phrase,
+                password: localU.password || serverU.password,
+                balance: Math.max(Number(serverU.balance) || 0, Number(localU.balance) || 0),
+                lifetimeProfit: Math.max(Number(serverU.lifetimeProfit) || 0, Number(localU.lifetimeProfit) || 0),
+                boostState: (serverU.boostState && serverU.boostState.isActive)
+                  ? serverU.boostState
+                  : (localU.boostState || serverU.boostState)
+              };
+              mergedMap.set(localU.id, mergedUser);
+            } else {
+              // Local user not yet registered on server: retain and send to server
+              mergedMap.set(localU.id, localU);
+              fetch('/api/users/register', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  id: localU.id,
+                  phrase: localU.phrase,
+                  password: localU.password
+                })
+              }).catch(() => {});
             }
           }
-          localStorage.setItem(STORAGE_USERS, JSON.stringify(merged));
+
+          const mergedUsers = Array.from(mergedMap.values());
+          localStorage.setItem(STORAGE_USERS, JSON.stringify(mergedUsers));
+          localStorage.setItem('boostpay_users', JSON.stringify(mergedUsers));
         }
 
         // Smart merge transactions
@@ -107,12 +160,17 @@ export class BoostPayStore {
           localStorage.setItem(STORAGE_CONFIG, JSON.stringify(data.config));
         }
 
-        // Refresh current user from server state
-        const curId = localStorage.getItem(STORAGE_CURRENT_USER_ID);
-        if (curId && data.users) {
-          const freshUser = data.users.find((u: User) => u.id === curId);
-          if (freshUser) {
-            this.setCurrentUser(freshUser);
+        // Refresh current user session from merged data without resetting
+        const curUser = this.getCurrentUser();
+        if (curUser) {
+          const fresh = this.getUsers().find(u => u.id === curUser.id);
+          if (fresh) {
+            const preserved: User = {
+              ...fresh,
+              phrase: curUser.phrase || fresh.phrase,
+              password: curUser.password || fresh.password
+            };
+            this.setCurrentUser(preserved);
           }
         }
       }
@@ -147,7 +205,7 @@ export class BoostPayStore {
   }
 
   static getUsers(): User[] {
-    const raw = localStorage.getItem(STORAGE_USERS);
+    const raw = localStorage.getItem(STORAGE_USERS) || localStorage.getItem('boostpay_users');
     if (!raw) return [];
     try {
       return JSON.parse(raw);
@@ -158,37 +216,136 @@ export class BoostPayStore {
 
   static saveUsers(users: User[]): void {
     localStorage.setItem(STORAGE_USERS, JSON.stringify(users));
+    localStorage.setItem('boostpay_users', JSON.stringify(users));
     this.pushToServer();
   }
 
   /**
-   * Synchronous, instant session retriever - NEVER resets on reload!
+   * Synchronous, instant session retriever - NEVER resets or logs out on reload!
+   * Checks primary storage key, fallback legacy keys, and stored User ID.
    */
   static getCurrentUser(): User | null {
-    const raw = localStorage.getItem(STORAGE_CURRENT_USER);
-    if (!raw) return null;
-    try {
-      const parsed: User = JSON.parse(raw);
-      // Try to find freshest from local users list
-      const users = this.getUsers();
-      const fresh = users.find(u => u.id === parsed.id);
-      return fresh || parsed;
-    } catch {
-      return null;
+    // 1. Try primary storage key
+    let raw = localStorage.getItem(STORAGE_CURRENT_USER);
+
+    // 2. Fallback to legacy keys
+    if (!raw) {
+      for (const k of LEGACY_USER_KEYS) {
+        const val = localStorage.getItem(k);
+        if (val) {
+          raw = val;
+          localStorage.setItem(STORAGE_CURRENT_USER, val);
+          break;
+        }
+      }
     }
+
+    if (raw) {
+      try {
+        const parsed: User = JSON.parse(raw);
+        if (parsed && parsed.id) {
+          // Merge with freshest user from collection
+          const users = this.getUsers();
+          const fresh = users.find(u => u.id === parsed.id);
+          if (fresh) {
+            return {
+              ...fresh,
+              phrase: fresh.phrase || parsed.phrase,
+              password: fresh.password || parsed.password
+            };
+          }
+          return parsed;
+        }
+      } catch {
+        // Fall through to ID-based lookup
+      }
+    }
+
+    // 3. Fallback: check stored user ID
+    for (const idKey of LEGACY_USER_ID_KEYS) {
+      const curId = localStorage.getItem(idKey);
+      if (curId) {
+        const users = this.getUsers();
+        const user = users.find(u => u.id === curId);
+        if (user) {
+          localStorage.setItem(STORAGE_CURRENT_USER, JSON.stringify(user));
+          localStorage.setItem(STORAGE_CURRENT_USER_ID, user.id);
+          return user;
+        }
+      }
+    }
+
+    return null;
   }
 
   /**
-   * Sets current user session both by object and by ID
+   * Sets current user session both by object and by ID across multiple keys
    */
   static setCurrentUser(user: User | null): void {
     if (!user) {
       localStorage.removeItem(STORAGE_CURRENT_USER);
       localStorage.removeItem(STORAGE_CURRENT_USER_ID);
+      for (const k of LEGACY_USER_KEYS) localStorage.removeItem(k);
+      for (const k of LEGACY_USER_ID_KEYS) localStorage.removeItem(k);
     } else {
-      localStorage.setItem(STORAGE_CURRENT_USER, JSON.stringify(user));
+      const serialized = JSON.stringify(user);
+      localStorage.setItem(STORAGE_CURRENT_USER, serialized);
       localStorage.setItem(STORAGE_CURRENT_USER_ID, user.id);
+      localStorage.setItem('boostpay_current_user', serialized);
+      localStorage.setItem('boostpay_user_id', user.id);
+
+      // Ensure user is also saved in users array
+      const users = this.getUsers();
+      const idx = users.findIndex(u => u.id === user.id);
+      if (idx >= 0) {
+        users[idx] = { ...users[idx], ...user };
+      } else {
+        users.push(user);
+      }
+      localStorage.setItem(STORAGE_USERS, JSON.stringify(users));
+      localStorage.setItem('boostpay_users', JSON.stringify(users));
     }
+  }
+
+  /**
+   * Admin session management: completely decoupled from user state!
+   * Persists across page reload and reboots.
+   */
+  static getAdminSession(): AdminSession | null {
+    try {
+      const raw = localStorage.getItem(STORAGE_ADMIN_SESSION);
+      if (!raw) return null;
+      const parsed: AdminSession = JSON.parse(raw);
+      if (parsed && parsed.isLoggedIn) {
+        return parsed;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  static setAdminSession(emailOrSession: string | Partial<AdminSession>): AdminSession {
+    const session: AdminSession = typeof emailOrSession === 'string'
+      ? {
+          isLoggedIn: true,
+          email: emailOrSession,
+          token: 'admin_tok_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9),
+          loginTime: Date.now()
+        }
+      : {
+          isLoggedIn: true,
+          email: emailOrSession.email || 'admin@gmail.com',
+          token: emailOrSession.token || ('admin_tok_' + Date.now()),
+          loginTime: emailOrSession.loginTime || Date.now()
+        };
+
+    localStorage.setItem(STORAGE_ADMIN_SESSION, JSON.stringify(session));
+    return session;
+  }
+
+  static clearAdminSession(): void {
+    localStorage.removeItem(STORAGE_ADMIN_SESSION);
   }
 
   /**

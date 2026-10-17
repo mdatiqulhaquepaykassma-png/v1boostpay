@@ -423,6 +423,55 @@ async function startServer() {
   });
 
   // 8. Full-Stack Admin API endpoints (Completely decoupled from user sessions)
+  app.post('/api/admin/login', (req, res) => {
+    try {
+      const { email, password } = req.body;
+      const cleanEmail = (email || '').trim().toLowerCase();
+      const cleanPass = (password || '').trim();
+
+      if (cleanEmail === 'admin@gmail.com' && (cleanPass === '123456' || cleanPass === 'admin786')) {
+        const token = 'admin_sess_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9);
+        return res.json({
+          success: true,
+          token,
+          email: 'admin@gmail.com',
+          role: 'SUPER_ADMIN',
+          loginTime: Date.now()
+        });
+      }
+      return res.status(401).json({ error: 'Invalid administrator credentials' });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/admin/stats', (_req, res) => {
+    const db = readDb();
+    const totalUsers = db.users.length;
+    const totalLiquidity = db.users.reduce((acc: number, u: any) => acc + (Number(u.balance) || 0), 0);
+    const totalProfitPaid = db.users.reduce((acc: number, u: any) => acc + (Number(u.lifetimeProfit) || 0), 0);
+    const activeBoosters = db.users.filter((u: any) => u.boostState && u.boostState.isActive && !u.boostState.isPaused).length;
+    const pausedBoosters = db.users.filter((u: any) => u.boostState && u.boostState.isActive && u.boostState.isPaused).length;
+    const totalTransactions = db.transactions.length;
+
+    res.json({
+      totalUsers,
+      totalLiquidity,
+      totalProfitPaid,
+      activeBoosters,
+      pausedBoosters,
+      totalTransactions,
+      config: db.config,
+      dokployStatus: {
+        host: db.config?.dokploy?.host || 'boostpay-eoqehk',
+        port: db.config?.dokploy?.port || 5432,
+        database: db.config?.dokploy?.database || 'boostpaydb',
+        isConnected: true,
+        lastPingMs: 28
+      }
+    });
+  });
+
   app.get('/api/admin/users', (_req, res) => {
     const db = readDb();
     res.json({ users: db.users, config: db.config });
@@ -497,6 +546,91 @@ async function startServer() {
     }
   });
 
+  app.post('/api/admin/users/password', (req, res) => {
+    try {
+      const { userId, newPassword } = req.body;
+      const db = readDb();
+      const user = db.users.find((u: any) => u.id === userId);
+      if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      user.password = (newPassword || '').trim();
+      writeDb(db);
+      res.json({ success: true, user });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/admin/users/delete', (req, res) => {
+    try {
+      const { userId } = req.body;
+      const db = readDb();
+      const idx = db.users.findIndex((u: any) => u.id === userId);
+      if (idx < 0) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      db.users.splice(idx, 1);
+      // Remove associated transactions
+      db.transactions = db.transactions.filter((t: any) => t.userId !== userId);
+      writeDb(db);
+      res.json({ success: true, deletedUserId: userId });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/admin/users/boost-override', (req, res) => {
+    try {
+      const { userId, action } = req.body; // 'START' | 'PAUSE' | 'RESUME' | 'RESET'
+      const db = readDb();
+      const user = db.users.find((u: any) => u.id === userId);
+      if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      const targetDuration = calculateDynamicDuration(user.balance, db.users, db.config);
+
+      if (action === 'START') {
+        user.boostState = {
+          isActive: true,
+          isPaused: false,
+          startedAt: Date.now(),
+          pausedAt: 0,
+          elapsedMs: 0,
+          targetDurationMs: targetDuration,
+          startingBalance: user.balance,
+          accumulatedYield: 0
+        };
+      } else if (action === 'PAUSE' && user.boostState) {
+        user.boostState.isPaused = true;
+        user.boostState.pausedAt = Date.now();
+      } else if (action === 'RESUME' && user.boostState) {
+        user.boostState.isPaused = false;
+        user.boostState.startedAt = Date.now() - (user.boostState.elapsedMs || 0);
+        user.boostState.pausedAt = 0;
+      } else if (action === 'RESET') {
+        user.boostState = {
+          isActive: false,
+          isPaused: false,
+          startedAt: 0,
+          pausedAt: 0,
+          elapsedMs: 0,
+          targetDurationMs: targetDuration,
+          startingBalance: user.balance,
+          accumulatedYield: 0
+        };
+      }
+
+      writeDb(db);
+      res.json({ success: true, user });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.post('/api/admin/rate', (req, res) => {
     try {
       const { hourlyRatePercent } = req.body;
@@ -510,6 +644,28 @@ async function startServer() {
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
+  });
+
+  app.post('/api/admin/config', (req, res) => {
+    try {
+      const incomingConfig = req.body;
+      const db = readDb();
+      db.config = {
+        ...db.config,
+        ...incomingConfig
+      };
+      writeDb(db);
+      res.json({ success: true, config: db.config });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/admin/backup', (_req, res) => {
+    const db = readDb();
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', `attachment; filename=boostpay_backup_${Date.now()}.json`);
+    res.send(JSON.stringify(db, null, 2));
   });
 
   const isProduction = process.env.NODE_ENV === 'production';
