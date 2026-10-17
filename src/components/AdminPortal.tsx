@@ -1,6 +1,6 @@
 import { FC, useState } from 'react';
-import { ShieldCheck, PlusCircle, MinusCircle, Users, MessageSquare, Percent, Search, Send, CheckCircle2, Lock, Unlock, AlertOctagon, KeyRound, Copy, Check, Eye, EyeOff } from 'lucide-react';
-import { BoostPayStore } from '../services/store';
+import { ShieldCheck, PlusCircle, MinusCircle, Users, MessageSquare, Percent, Search, Send, CheckCircle2, Lock, Unlock, KeyRound, Copy, Check, Eye, EyeOff } from 'lucide-react';
+import { BoostPayStore, copyToClipboard } from '../services/store';
 import { User, SystemConfig, Conversation, Message } from '../types';
 
 interface Props {
@@ -8,7 +8,10 @@ interface Props {
 }
 
 export const AdminPortal: FC<Props> = ({ onBack }) => {
-  const [users, setUsers] = useState<User[]>(BoostPayStore.getUsers());
+  const [users, setUsers] = useState<User[]>(() => {
+    BoostPayStore.initSync();
+    return BoostPayStore.getUsers();
+  });
   const [config, setConfig] = useState<SystemConfig>(BoostPayStore.getConfig());
   const [conversations, setConversations] = useState<Conversation[]>(BoostPayStore.getConversations());
   const [messages, setMessages] = useState<Message[]>(BoostPayStore.getMessages());
@@ -31,83 +34,140 @@ export const AdminPortal: FC<Props> = ({ onBack }) => {
   const [activeConv, setActiveConv] = useState<Conversation | null>(null);
   const [supportMessage, setSupportMessage] = useState('');
 
-  const refreshData = () => {
+  const refreshData = async () => {
+    await BoostPayStore.initSync();
     setUsers(BoostPayStore.getUsers());
     setConfig(BoostPayStore.getConfig());
     setConversations(BoostPayStore.getConversations());
     setMessages(BoostPayStore.getMessages());
   };
 
-  const handleSaveRate = (e: React.FormEvent) => {
+  const handleSaveRate = async (e: React.FormEvent) => {
     e.preventDefault();
     const rate = parseFloat(customHourlyRate);
     if (isNaN(rate) || rate < 0) return;
 
-    const newCfg = { ...config, hourlyRatePercent: rate };
-    BoostPayStore.saveConfig(newCfg);
-    setConfig(newCfg);
-    setRateSuccess(true);
-    setTimeout(() => setRateSuccess(false), 2500);
+    try {
+      const res = await fetch('/api/admin/rate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hourlyRatePercent: rate })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setConfig(data.config);
+        BoostPayStore.saveConfig(data.config);
+        setRateSuccess(true);
+        setTimeout(() => setRateSuccess(false), 2500);
+      }
+    } catch {
+      const newCfg = { ...config, hourlyRatePercent: rate };
+      BoostPayStore.saveConfig(newCfg);
+      setConfig(newCfg);
+      setRateSuccess(true);
+      setTimeout(() => setRateSuccess(false), 2500);
+    }
   };
 
-  const handleAdjustBalance = (type: 'CREDIT' | 'DEBIT') => {
+  const handleAdjustBalance = async (type: 'CREDIT' | 'DEBIT') => {
     if (!selectedUser) return;
     const amount = parseFloat(adjustAmount);
     if (isNaN(amount) || amount <= 0) return;
 
-    const allUsers = BoostPayStore.getUsers();
-    const target = allUsers.find(u => u.id === selectedUser.id);
-    if (!target) return;
-
-    if (type === 'CREDIT') {
-      target.balance += amount;
-      BoostPayStore.addTransaction({
-        userId: target.id,
-        type: 'ADMIN_CREDIT',
-        amount: amount,
-        notes: adjustNote || 'Treasury Credit by Admin'
+    try {
+      const res = await fetch('/api/admin/adjust', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: selectedUser.id,
+          type,
+          amount,
+          notes: adjustNote || `Admin Treasury ${type}`
+        })
       });
-    } else {
-      target.balance = Math.max(0, target.balance - amount);
-      BoostPayStore.addTransaction({
-        userId: target.id,
-        type: 'ADMIN_DEBIT',
-        amount: amount,
-        notes: adjustNote || 'Treasury Debit by Admin'
-      });
-    }
+      if (res.ok) {
+        await refreshData();
+        const updatedUsers = BoostPayStore.getUsers();
+        const target = updatedUsers.find(u => u.id === selectedUser.id);
+        if (target) setSelectedUser({ ...target });
+        setAdjustAmount('');
+        setAdjustNote('');
+      }
+    } catch {
+      // Local fallback
+      const allUsers = BoostPayStore.getUsers();
+      const target = allUsers.find(u => u.id === selectedUser.id);
+      if (!target) return;
 
-    BoostPayStore.saveUsers(allUsers);
-    setUsers(allUsers);
-    setSelectedUser({ ...target });
-    setAdjustAmount('');
-    setAdjustNote('');
-    refreshData();
-  };
-
-  const toggleBlockUser = (userId: string) => {
-    const allUsers = BoostPayStore.getUsers();
-    const target = allUsers.find(u => u.id === userId);
-    if (!target) return;
-
-    target.isBlocked = !target.isBlocked;
-    BoostPayStore.saveUsers(allUsers);
-    refreshData();
-    if (selectedUser?.id === userId) {
+      if (type === 'CREDIT') {
+        target.balance += amount;
+      } else {
+        target.balance = Math.max(0, target.balance - amount);
+      }
+      BoostPayStore.saveUsers(allUsers);
+      setUsers(allUsers);
       setSelectedUser({ ...target });
+      setAdjustAmount('');
+      setAdjustNote('');
+      refreshData();
     }
   };
 
-  const toggleTempLock = (userId: string) => {
-    const allUsers = BoostPayStore.getUsers();
-    const target = allUsers.find(u => u.id === userId);
+  const toggleBlockUser = async (userId: string) => {
+    const target = users.find(u => u.id === userId);
     if (!target) return;
+    const action = target.isBlocked ? 'UNBLOCK' : 'BLOCK';
 
-    target.isTempLocked = !target.isTempLocked;
-    BoostPayStore.saveUsers(allUsers);
-    refreshData();
-    if (selectedUser?.id === userId) {
-      setSelectedUser({ ...target });
+    try {
+      const res = await fetch('/api/admin/status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, action })
+      });
+      if (res.ok) {
+        await refreshData();
+        const updatedUsers = BoostPayStore.getUsers();
+        const updatedTarget = updatedUsers.find(u => u.id === userId);
+        if (selectedUser?.id === userId && updatedTarget) {
+          setSelectedUser({ ...updatedTarget });
+        }
+      }
+    } catch {
+      target.isBlocked = !target.isBlocked;
+      BoostPayStore.saveUsers(users);
+      refreshData();
+      if (selectedUser?.id === userId) {
+        setSelectedUser({ ...target });
+      }
+    }
+  };
+
+  const toggleTempLock = async (userId: string) => {
+    const target = users.find(u => u.id === userId);
+    if (!target) return;
+    const action = target.isTempLocked ? 'UNLOCK' : 'LOCK';
+
+    try {
+      const res = await fetch('/api/admin/status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, action })
+      });
+      if (res.ok) {
+        await refreshData();
+        const updatedUsers = BoostPayStore.getUsers();
+        const updatedTarget = updatedUsers.find(u => u.id === userId);
+        if (selectedUser?.id === userId && updatedTarget) {
+          setSelectedUser({ ...updatedTarget });
+        }
+      }
+    } catch {
+      target.isTempLocked = !target.isTempLocked;
+      BoostPayStore.saveUsers(users);
+      refreshData();
+      if (selectedUser?.id === userId) {
+        setSelectedUser({ ...target });
+      }
     }
   };
 
@@ -116,7 +176,7 @@ export const AdminPortal: FC<Props> = ({ onBack }) => {
   };
 
   const copyText = (text: string, id: string) => {
-    navigator.clipboard.writeText(text);
+    copyToClipboard(text);
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 2000);
   };
@@ -157,7 +217,7 @@ export const AdminPortal: FC<Props> = ({ onBack }) => {
   const filteredUsers = users.filter(u => u.id.includes(searchTerm) || (u.phrase && u.phrase.includes(searchTerm)));
 
   return (
-    <div className="w-full px-4 py-4 space-y-4 text-zinc-100">
+    <div className="w-full max-w-4xl mx-auto px-4 py-4 space-y-4 text-zinc-100">
       {/* Header */}
       <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
         <div className="flex items-center gap-2">
@@ -166,13 +226,13 @@ export const AdminPortal: FC<Props> = ({ onBack }) => {
           </div>
           <div>
             <h1 className="text-base font-bold text-white">Admin Control Portal</h1>
-            <p className="text-[11px] text-zinc-400">Manage Treasury, Users, Phrases & Yield</p>
+            <p className="text-[11px] text-zinc-400">Full-Stack Backend Management Console</p>
           </div>
         </div>
 
         <button
           onClick={onBack}
-          className="rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-300 hover:text-white"
+          className="rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-300 hover:text-white cursor-pointer"
         >
           Exit Admin
         </button>
@@ -204,13 +264,13 @@ export const AdminPortal: FC<Props> = ({ onBack }) => {
 
             <button
               type="submit"
-              className="w-full h-9 rounded-xl bg-amber-500 text-xs font-bold text-zinc-950 hover:bg-amber-400 transition"
+              className="w-full h-9 rounded-xl bg-amber-500 text-xs font-bold text-zinc-950 hover:bg-amber-400 transition cursor-pointer"
             >
-              Update Rate
+              Update Server Rate
             </button>
 
             {rateSuccess && (
-              <p className="text-center text-[11px] text-emerald-400">Rate updated successfully!</p>
+              <p className="text-center text-[11px] text-emerald-400">Rate updated successfully on server!</p>
             )}
           </form>
         </div>
@@ -252,14 +312,14 @@ export const AdminPortal: FC<Props> = ({ onBack }) => {
                 <button
                   type="button"
                   onClick={() => handleAdjustBalance('CREDIT')}
-                  className="flex-1 h-8 rounded-xl bg-emerald-600 text-[11px] font-bold text-white hover:bg-emerald-500 transition"
+                  className="flex-1 h-8 rounded-xl bg-emerald-600 text-[11px] font-bold text-white hover:bg-emerald-500 transition cursor-pointer"
                 >
                   Credit
                 </button>
                 <button
                   type="button"
                   onClick={() => handleAdjustBalance('DEBIT')}
-                  className="flex-1 h-8 rounded-xl bg-red-600 text-[11px] font-bold text-white hover:bg-red-500 transition"
+                  className="flex-1 h-8 rounded-xl bg-red-600 text-[11px] font-bold text-white hover:bg-red-500 transition cursor-pointer"
                 >
                   Debit
                 </button>
@@ -326,13 +386,13 @@ export const AdminPortal: FC<Props> = ({ onBack }) => {
                   <div className="flex items-center gap-1.5">
                     <button
                       onClick={() => setSelectedUser(u)}
-                      className="px-2 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-[10px] text-zinc-200"
+                      className="px-2.5 py-1 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-[11px] text-zinc-200 cursor-pointer"
                     >
                       {isSelected ? 'Selected' : 'Select'}
                     </button>
                     <button
                       onClick={() => toggleBlockUser(u.id)}
-                      className={`px-2 py-1 rounded-lg text-[10px] font-bold ${
+                      className={`px-2.5 py-1 rounded-xl text-[11px] font-bold cursor-pointer ${
                         u.isBlocked ? 'bg-emerald-900/40 text-emerald-300' : 'bg-red-900/40 text-red-300'
                       }`}
                     >
@@ -340,7 +400,7 @@ export const AdminPortal: FC<Props> = ({ onBack }) => {
                     </button>
                     <button
                       onClick={() => toggleTempLock(u.id)}
-                      className="p-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400"
+                      className="p-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-400 cursor-pointer"
                       title={u.isTempLocked ? 'Unlock' : 'Lock'}
                     >
                       {u.isTempLocked ? <Unlock className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5" />}
@@ -352,22 +412,22 @@ export const AdminPortal: FC<Props> = ({ onBack }) => {
                 <div className="rounded-xl border border-zinc-800 bg-zinc-900/70 p-2 text-xs">
                   <div className="flex items-center justify-between mb-1 text-[11px] text-zinc-400">
                     <span className="flex items-center gap-1 text-zinc-300 font-semibold">
-                      <KeyRound className="w-3 h-3 text-amber-400" /> 12-Word Recovery Phrase & Pass:
+                      <KeyRound className="w-3 h-3 text-amber-400" /> 12-Word Recovery Phrase & Password:
                     </span>
                     <div className="flex items-center gap-2">
                       <button
                         onClick={() => toggleRevealPhrase(u.id)}
-                        className="flex items-center gap-1 text-amber-400 hover:text-amber-300 text-[10px]"
+                        className="flex items-center gap-1 text-amber-400 hover:text-amber-300 text-[10px] cursor-pointer"
                       >
                         {isRevealed ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
                         <span>{isRevealed ? 'Hide' : 'Reveal'}</span>
                       </button>
                       <button
                         onClick={() => copyText(u.phrase, `p-${u.id}`)}
-                        className="flex items-center gap-1 text-zinc-400 hover:text-zinc-200 text-[10px]"
+                        className="flex items-center gap-1 text-zinc-400 hover:text-zinc-200 text-[10px] cursor-pointer"
                       >
                         {copiedId === `p-${u.id}` ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                        <span>{copiedId === `p-${u.id}` ? 'Copied' : 'Copy Phrase'}</span>
+                        <span>{copiedId === `p-${u.id}` ? 'Copied' : 'Copy'}</span>
                       </button>
                     </div>
                   </div>
@@ -386,7 +446,7 @@ export const AdminPortal: FC<Props> = ({ onBack }) => {
                       </>
                     ) : (
                       <span className="text-zinc-600 select-none">
-                        ••••••••••••••••••••••••••••••••••••••••••••••••••••• (Click Reveal to view 12-word seed phrase)
+                        ••••••••••••••••••••••••••••••••••••••••••••••••••••• (Click Reveal to view seed phrase & password)
                       </span>
                     )}
                   </div>
@@ -414,7 +474,7 @@ export const AdminPortal: FC<Props> = ({ onBack }) => {
               <button
                 key={c.id}
                 onClick={() => setActiveConv(c)}
-                className={`w-full text-left rounded-lg p-2 transition text-xs ${
+                className={`w-full text-left rounded-lg p-2 transition text-xs cursor-pointer ${
                   activeConv?.id === c.id ? 'bg-amber-500/20 border border-amber-500/30' : 'hover:bg-zinc-900'
                 }`}
               >
@@ -441,7 +501,7 @@ export const AdminPortal: FC<Props> = ({ onBack }) => {
               />
               <button
                 type="submit"
-                className="rounded-xl bg-sky-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-sky-500"
+                className="rounded-xl bg-sky-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-sky-500 cursor-pointer"
               >
                 <Send className="w-3.5 h-3.5" />
               </button>

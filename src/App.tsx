@@ -4,7 +4,7 @@
  */
 
 import { useState, useEffect } from 'react';
-import { Wallet, Trophy, MessageSquare, Download, CheckCircle2, Shield, ArrowRight, Eye, EyeOff } from 'lucide-react';
+import { Wallet, Trophy, MessageSquare, Download, CheckCircle2, ExternalLink, Shield, ArrowRight, Eye, EyeOff } from 'lucide-react';
 import { BoostPayStore } from './services/store';
 import { User, SystemConfig } from './types';
 import { Navbar } from './components/Navbar';
@@ -258,22 +258,23 @@ export default function App() {
                 <span>Leaderboard</span>
               </button>
 
-              {/* 3. Install App Action */}
+              {/* 3. Install / Open App Action */}
               <div className="flex flex-col items-center justify-center">
-                {isInstalled && !justInstalled ? (
+                {isInstalled || justInstalled ? (
                   <button
-                    disabled
-                    className="flex flex-col items-center justify-center gap-1 text-[11px] text-emerald-400 font-medium"
-                    title="App already installed"
+                    onClick={() => {
+                      try {
+                        window.open(window.location.origin, '_blank');
+                      } catch {
+                        window.location.href = '/';
+                      }
+                    }}
+                    className="flex flex-col items-center justify-center gap-1 text-[11px] text-emerald-400 font-bold hover:text-emerald-300 transition cursor-pointer"
+                    title="Open installed BoostPay app"
                   >
-                    <CheckCircle2 className="w-5 h-5" />
-                    <span>Installed</span>
+                    <ExternalLink className="w-5 h-5" />
+                    <span>Open</span>
                   </button>
-                ) : justInstalled ? (
-                  <div className="flex flex-col items-center justify-center gap-1 text-[11px] text-emerald-300 font-bold">
-                    <CheckCircle2 className="w-5 h-5 text-emerald-400" />
-                    <span>Installed!</span>
-                  </div>
                 ) : (
                   <button
                     onClick={install}

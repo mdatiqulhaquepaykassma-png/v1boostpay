@@ -1,6 +1,6 @@
 {
-  "summary": "Implementation plan to remove Caddy from nixpacks.toml so the application runs exclusively on Node.js/Express server on Dokploy, resolving the package conflict error.",
-  "updatedAt": "2026-10-17T10:04:40.758711355Z",
+  "summary": "Implementation plan for fixing copy buttons, session persistence on reload, PWA install/open button, full-stack admin backend APIs, and server-side background compounding ticker for offline/logged out boosting.",
+  "updatedAt": "2026-10-17T10:47:27.761890165Z",
   "requestFeedback": true,
   "userFacing": true
 }

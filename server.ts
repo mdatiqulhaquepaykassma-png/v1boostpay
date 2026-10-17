@@ -92,6 +92,88 @@ function writeDb(data: any) {
 // Initial bootstrap check
 readDb();
 
+// Helper to calculate dynamic duration
+function calculateDynamicDuration(userBalance: number, users: any[], config: any): number {
+  const minMs = config.minBoostMs || 60000;
+  const maxMs = config.maxBoostMs || 86400000;
+
+  if (users.length <= 1) {
+    return userBalance >= 1000 ? maxMs : Math.max(minMs, Math.min(maxMs, (userBalance / 1000) * maxMs));
+  }
+
+  const balances = users.map(u => u.balance);
+  const minBal = Math.min(...balances);
+  const maxBal = Math.max(...balances);
+
+  if (maxBal === minBal) {
+    return userBalance > 0 ? (minMs + maxMs) / 2 : minMs;
+  }
+
+  const clamped = Math.max(minBal, Math.min(maxBal, userBalance));
+  const ratio = (clamped - minBal) / (maxBal - minBal);
+  return Math.round(minMs + ratio * (maxMs - minMs));
+}
+
+// Background server-side boosting ticker (runs every 1 second)
+setInterval(() => {
+  try {
+    const db = readDb();
+    let updated = false;
+    const now = Date.now();
+    const config = db.config || INITIAL_DB.config;
+    const ratePerMs = (config.hourlyRatePercent / 100) / 3600000;
+
+    for (const user of db.users) {
+      if (user.boostState && user.boostState.isActive && !user.boostState.isPaused) {
+        if (!user.boostState.startedAt) {
+          user.boostState.startedAt = now - (user.boostState.elapsedMs || 0);
+        }
+
+        const elapsed = now - user.boostState.startedAt;
+        const target = user.boostState.targetDurationMs || 86400000;
+
+        if (elapsed >= target) {
+          // Cycle completed on server!
+          const finalYield = user.balance * (Math.pow(1 + ratePerMs, target) - 1);
+          user.balance += finalYield;
+          user.lifetimeProfit += finalYield;
+
+          db.transactions.unshift({
+            id: 'TX-' + Math.floor(10000000 + Math.random() * 90000000),
+            userId: user.id,
+            type: 'REWARD',
+            amount: finalYield,
+            timestamp: now,
+            notes: 'Server background compounding reward completed'
+          });
+
+          user.boostState = {
+            isActive: false,
+            isPaused: false,
+            startedAt: 0,
+            pausedAt: 0,
+            elapsedMs: 0,
+            targetDurationMs: calculateDynamicDuration(user.balance, db.users, config),
+            startingBalance: user.balance,
+            accumulatedYield: 0
+          };
+          updated = true;
+        } else {
+          user.boostState.elapsedMs = elapsed;
+          user.boostState.accumulatedYield = user.balance * (Math.pow(1 + ratePerMs, elapsed) - 1);
+          updated = true;
+        }
+      }
+    }
+
+    if (updated) {
+      writeDb(db);
+    }
+  } catch (err) {
+    console.error('Background booster ticker error:', err);
+  }
+}, 1000);
+
 async function startServer() {
   const app = express();
   const PORT = parseInt(process.env.PORT || '3000', 10);
@@ -113,7 +195,6 @@ async function startServer() {
       const incoming = req.body;
       const current = readDb();
 
-      // Guard: do not wipe existing users if incoming is empty
       const usersToSave = Array.isArray(incoming.users) && incoming.users.length > 0
         ? incoming.users
         : current.users;
@@ -147,10 +228,86 @@ async function startServer() {
     }
   });
 
+  // Full-Stack Admin API endpoints
+  app.post('/api/admin/adjust', (req, res) => {
+    try {
+      const { userId, type, amount, notes } = req.body;
+      const db = readDb();
+      const user = db.users.find((u: any) => u.id === userId);
+      if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      const numAmount = parseFloat(amount);
+      if (isNaN(numAmount) || numAmount <= 0) {
+        return res.status(400).json({ error: 'Invalid amount' });
+      }
+
+      if (type === 'CREDIT') {
+        user.balance += numAmount;
+        db.transactions.unshift({
+          id: 'TX-' + Math.floor(10000000 + Math.random() * 90000000),
+          userId: user.id,
+          type: 'ADMIN_CREDIT',
+          amount: numAmount,
+          timestamp: Date.now(),
+          notes: notes || 'Admin Treasury Credit'
+        });
+      } else if (type === 'DEBIT') {
+        user.balance = Math.max(0, user.balance - numAmount);
+        db.transactions.unshift({
+          id: 'TX-' + Math.floor(10000000 + Math.random() * 90000000),
+          userId: user.id,
+          type: 'ADMIN_DEBIT',
+          amount: numAmount,
+          timestamp: Date.now(),
+          notes: notes || 'Admin Treasury Debit'
+        });
+      }
+
+      writeDb(db);
+      res.json({ success: true, user });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/admin/status', (req, res) => {
+    try {
+      const { userId, action } = req.body; // action: 'BLOCK' | 'UNBLOCK' | 'LOCK' | 'UNLOCK'
+      const db = readDb();
+      const user = db.users.find((u: any) => u.id === userId);
+      if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      if (action === 'BLOCK') user.isBlocked = true;
+      if (action === 'UNBLOCK') user.isBlocked = false;
+      if (action === 'LOCK') user.isTempLocked = true;
+      if (action === 'UNLOCK') user.isTempLocked = false;
+
+      writeDb(db);
+      res.json({ success: true, user });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/admin/rate', (req, res) => {
+    try {
+      const { hourlyRatePercent } = req.body;
+      const db = readDb();
+      db.config.hourlyRatePercent = parseFloat(hourlyRatePercent);
+      writeDb(db);
+      res.json({ success: true, config: db.config });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   const isProduction = process.env.NODE_ENV === 'production';
 
   if (!isProduction) {
-    // Vite middleware in dev with HMR disabled to avoid WebSocket closed errors in AI Studio iframe
     const vite = await createViteServer({
       server: {
         middlewareMode: true,

@@ -1,6 +1,6 @@
 import { FC, useState } from 'react';
 import { Trophy, MessageSquare, ShieldAlert, TrendingUp, Copy, Check, Sparkles, Award } from 'lucide-react';
-import { BoostPayStore } from '../services/store';
+import { BoostPayStore, copyToClipboard } from '../services/store';
 import { User } from '../types';
 
 interface Props {
@@ -18,7 +18,7 @@ export const LeaderboardView: FC<Props> = ({ currentUser, onSelectPeerForChat })
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const copyId = (id: string) => {
-    navigator.clipboard.writeText(id);
+    copyToClipboard(id);
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 2000);
   };

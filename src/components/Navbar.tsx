@@ -1,6 +1,7 @@
 import { FC, useState } from 'react';
 import { Copy, Check, LogOut, Sparkles } from 'lucide-react';
 import { User } from '../types';
+import { copyToClipboard } from '../services/store';
 
 interface Props {
   user: User | null;
@@ -13,7 +14,7 @@ export const Navbar: FC<Props> = ({ user, isAdmin, onLogout }) => {
 
   const copyId = () => {
     if (!user) return;
-    navigator.clipboard.writeText(user.id);
+    copyToClipboard(user.id);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -42,7 +43,7 @@ export const Navbar: FC<Props> = ({ user, isAdmin, onLogout }) => {
           {user && !isAdmin && (
             <button
               onClick={copyId}
-              className="flex items-center gap-1 rounded-xl border border-zinc-800 bg-zinc-900 px-2.5 py-1.5 text-[11px] font-mono font-medium text-zinc-300 hover:border-zinc-700 active:scale-95 transition"
+              className="flex items-center gap-1 rounded-xl border border-zinc-800 bg-zinc-900 px-2.5 py-1.5 text-[11px] font-mono font-medium text-zinc-300 hover:border-zinc-700 active:scale-95 transition cursor-pointer"
               title="Tap to copy User ID"
             >
               <span className="text-zinc-500">ID:</span>
@@ -58,7 +59,7 @@ export const Navbar: FC<Props> = ({ user, isAdmin, onLogout }) => {
           {/* Logout */}
           <button
             onClick={onLogout}
-            className="flex items-center gap-1 rounded-xl border border-zinc-800 bg-zinc-900 px-2.5 py-1.5 text-[11px] text-zinc-400 hover:text-red-400 hover:border-zinc-700 active:scale-95 transition"
+            className="flex items-center gap-1 rounded-xl border border-zinc-800 bg-zinc-900 px-2.5 py-1.5 text-[11px] text-zinc-400 hover:text-red-400 hover:border-zinc-700 active:scale-95 transition cursor-pointer"
             title="Sign Out"
           >
             <LogOut className="w-3.5 h-3.5" />

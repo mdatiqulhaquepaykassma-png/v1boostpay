@@ -39,6 +39,7 @@ This document maintains the complete, chronological history of all user prompts,
 | **29** | Leaderboard Re-Integration & Responsive Layout | Feature & Layout | Re-integrated Leaderboard with 4-tab bottom navigation (`Wallet`, `Leaderboard`, `Install`, `Messenger`); balance ranking with numeric ID, lifetime profit, and direct peer chat trigger; removed artificial mobile-only viewport frame ("no need mobile only framing") for a modern responsive design. |
 | **30** | Dokploy Nixpacks Node.js 20 Upgrade | Deployment Fix | Added `nixpacks.toml` configuration specifying Node.js 20.x LTS, Bun, and Caddy to resolve the Node.js 18 End-Of-Life build error on Dokploy. |
 | **31** | Nixpacks Caddy Conflict Removal | Deployment Fix | Removed `caddy` from `nixpacks.toml` nixPkgs to prevent systemd service file conflict during Dokploy Nixpacks build, ensuring execution runs exclusively via Node.js/Express server. |
+| **32** | Full-Stack Server Boosting & Robust Fixes | Full-Stack Overhaul | Server-side background boosting ticker in `server.ts` processing active boosts in real time while offline or logged out; persistent session recovery on reload; robust clipboard copy helper; PWA install button displaying "Open" without popups when installed; full-stack backend admin operations. |
 
 ---
 
@@ -358,3 +359,16 @@ main balance e boosting balance realtimer show hobe na session yield e show hobe
 - **User:** `boostpaydbuser`
 - **Password:** `123456`
 - **Tables:** `users`, `user_balances`, `transactions`, `conversations`, `messages`, `system_config`.
+
+---
+
+### Prompt 32: Full-Stack Server Boosting & Robust Fixes
+* **Key Fixes & Enhancements:**
+  1. **Robust Copy Helper:** Implemented `copyToClipboard` utility with `navigator.clipboard.writeText` and fallback to `document.execCommand('copy')`.
+  2. **Session Persistence:** App restores `boostpay_current_user_v3` on reload, preventing logout.
+  3. **Dynamic Boost Duration:** Community-relative calculation (highest balance = 24h, lowest = 1m).
+  4. **PWA Install / Open Button:** Detects installation; when installed, displays "Open" button launching app without popups.
+  5. **Full-Stack Admin Backend:** Admin CRUD operations, credits/debits, block/unblock, and phrase/password inspection routed via backend APIs and persisted to `data/boostpay_db.json`.
+  6. **Server-Side Background Boosting:** `server.ts` runs a periodic background ticker updating user boost progress in real time. When completed, rewards are credited to main balance and ledger automatically, even while users are offline or logged out.
+
+---

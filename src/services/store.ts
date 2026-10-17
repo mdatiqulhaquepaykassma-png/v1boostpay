@@ -27,6 +27,26 @@ export function generateNumericId(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
+export function copyToClipboard(text: string): boolean {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).catch(() => {});
+    return true;
+  }
+  try {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    const successful = document.execCommand('copy');
+    document.body.removeChild(textarea);
+    return successful;
+  } catch {
+    return false;
+  }
+}
+
 export function getDefaultConfig(): SystemConfig {
   return {
     hourlyRatePercent: 1.0,
