@@ -38,6 +38,7 @@ This document maintains the complete, chronological history of all user prompts,
 | **28** | Mobile Android Fintech Transformation | Full-Stack & UI Overhaul | Bottom nav with centered install button & Messenger; high-precision enlarged main balance decimals; admin recovery phrase & password inspection; password authentication for signup/login; dedicated `/admin` URL route; prompt.md hidden from frontend UI; full-stack Express backend with disk persistence (`data/boostpay_db.json`); eradicated AI-generated fluff ("USD Strict", fake connection chips). |
 | **29** | Leaderboard Re-Integration & Responsive Layout | Feature & Layout | Re-integrated Leaderboard with 4-tab bottom navigation (`Wallet`, `Leaderboard`, `Install`, `Messenger`); balance ranking with numeric ID, lifetime profit, and direct peer chat trigger; removed artificial mobile-only viewport frame ("no need mobile only framing") for a modern responsive design. |
 | **30** | Dokploy Nixpacks Node.js 20 Upgrade | Deployment Fix | Added `nixpacks.toml` configuration specifying Node.js 20.x LTS, Bun, and Caddy to resolve the Node.js 18 End-Of-Life build error on Dokploy. |
+| **31** | Nixpacks Caddy Conflict Removal | Deployment Fix | Removed `caddy` from `nixpacks.toml` nixPkgs to prevent systemd service file conflict during Dokploy Nixpacks build, ensuring execution runs exclusively via Node.js/Express server. |
 
 ---
 
@@ -320,6 +321,15 @@ main balance e boosting balance realtimer show hobe na session yield e show hobe
 * **Resolution & Implementation:**
   - Created root `nixpacks.toml` specifying `nodejs_20`, `bun`, and `caddy`.
   - Ensures Nixpacks builder on Dokploy correctly builds using Node.js 20.x LTS and Bun.
+
+---
+
+### Prompt 31: Nixpacks Caddy Conflict Removal
+* **Deployment Error Addressed:**
+  > `error: Unable to build profile. There is a conflict for the following files: /nix/store/.../caddy.service`
+* **Resolution & Implementation:**
+  - Removed `caddy` from `nixpacks.toml` `nixPkgs` array (retaining `["nodejs_20", "bun"]`).
+  - Eliminates the service file collision and allows the app to serve requests entirely through the Node.js/Express server (`server.ts`).
 
 ---
 

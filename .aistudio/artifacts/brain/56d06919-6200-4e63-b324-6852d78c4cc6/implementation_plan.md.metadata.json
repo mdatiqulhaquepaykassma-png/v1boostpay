@@ -1,6 +1,6 @@
 {
-  "summary": "Implementation plan for adding nixpacks.toml to specify Node.js 20.x LTS for Dokploy deployment and resolve the Node 18 End-Of-Life build error.",
-  "updatedAt": "2026-10-17T09:56:47.769681184Z",
+  "summary": "Implementation plan to remove Caddy from nixpacks.toml so the application runs exclusively on Node.js/Express server on Dokploy, resolving the package conflict error.",
+  "updatedAt": "2026-10-17T10:04:40.758711355Z",
   "requestFeedback": true,
   "userFacing": true
 }

@@ -1,29 +1,29 @@
-# Dokploy Nixpacks Node.js Version Fix Plan
+# Nixpacks Caddy Conflict Fix Plan
 
-Fix the Nixpacks build failure on Dokploy caused by Node.js 18 reaching End-Of-Life by introducing a `nixpacks.toml` configuration file specifying Node.js 20.x LTS.
+Remove Caddy from `nixpacks.toml` to prevent package file conflicts during Nixpacks build on Dokploy, allowing the application to run exclusively via the Node.js/Express server.
 
 ---
 
 ## User Review & Critical Decisions
 
 > [!IMPORTANT]
-> - **Node.js Version**: Configured to use Node.js 20.x LTS via `nixpacks.toml`.
-> - **Build Commands**: Standard `bun` and `vite` build pipeline preserved.
+> - **Caddy Removal**: Remove `caddy` from `nixPkgs` in `nixpacks.toml`.
+> - **Server Execution**: The app runs fully via `server.ts` (Node.js + Express + Vite middleware / static).
 
 ---
 
 ## 1. Overview & Core Concept
 
-- **Problem**: Dokploy default Nixpacks builder attempted to use Node.js 18, which has reached End-Of-Life and has been removed from nixpkgs.
-- **Solution**: Add a `nixpacks.toml` file at the root of the repository specifying `NODE_VERSION="20"`.
+- **Problem**: Nixpacks attempted to install Caddy alongside Node.js and Bun, causing a file path conflict (`caddy.service`).
+- **Solution**: Update `nixpacks.toml` to contain only `nodejs_20` and `bun`.
 
 ---
 
 ## 2. Technical Implementation
 
-- Create `nixpacks.toml`:
+- Update `nixpacks.toml`:
   ```toml
   [phases.setup]
-  nixPkgs = ["nodejs_20", "bun", "caddy"]
+  nixPkgs = ["nodejs_20", "bun"]
   ```
-- Verify build with `compile_applet`.
+- Verify compilation with `compile_applet`.
