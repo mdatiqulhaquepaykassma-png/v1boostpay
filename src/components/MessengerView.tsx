@@ -5,28 +5,31 @@ import { User, Conversation, Message } from '../types';
 
 interface Props {
   currentUser: User;
+  initialPeerId?: string | null;
   targetPeerId?: string | null;
 }
 
-export const MessengerView: FC<Props> = ({ currentUser, targetPeerId }) => {
+export const MessengerView: FC<Props> = ({ currentUser, initialPeerId, targetPeerId }) => {
   const [conversations, setConversations] = useState<Conversation[]>(BoostPayStore.getConversations());
   const [messages, setMessages] = useState<Message[]>(BoostPayStore.getMessages());
   const [activeConv, setActiveConv] = useState<Conversation | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [inputMsg, setInputMsg] = useState('');
 
+  const peerIdToUse = initialPeerId || targetPeerId;
+
   // Auto-focus conversation if initiated from Leaderboard
   useEffect(() => {
-    if (targetPeerId) {
+    if (peerIdToUse) {
       const allConvs = BoostPayStore.getConversations();
       let existing = allConvs.find(c =>
-        c.participants.includes(currentUser.id) && c.participants.includes(targetPeerId)
+        c.participants.includes(currentUser.id) && c.participants.includes(peerIdToUse)
       );
 
       if (!existing) {
         existing = {
-          id: `CONV-${currentUser.id}-${targetPeerId}`,
-          participants: [currentUser.id, targetPeerId],
+          id: `CONV-${currentUser.id}-${peerIdToUse}`,
+          participants: [currentUser.id, peerIdToUse],
           lastMessage: 'Conversation initiated from Leaderboard',
           lastMessageAt: Date.now()
         };
@@ -36,7 +39,7 @@ export const MessengerView: FC<Props> = ({ currentUser, targetPeerId }) => {
       }
       setActiveConv(existing);
     }
-  }, [targetPeerId, currentUser.id]);
+  }, [peerIdToUse, currentUser.id]);
 
   // New Chat Dialog
   const [isNewChatOpen, setIsNewChatOpen] = useState(false);

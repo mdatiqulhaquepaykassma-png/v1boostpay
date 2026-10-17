@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -7,16 +7,29 @@ interface BeforeInstallPromptEvent extends Event {
 
 export function usePWAInstall() {
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
-  const [isInstalled, setIsInstalled] = useState(false);
+  const [isInstalled, setIsInstalled] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    const isStandalone =
+      window.matchMedia('(display-mode: standalone)').matches ||
+      (window.navigator as unknown as { standalone?: boolean }).standalone === true ||
+      localStorage.getItem('boostpay_pwa_installed') === 'true';
+    return isStandalone;
+  });
   const [isInstallLoading, setIsInstallLoading] = useState(false);
   const [justInstalled, setJustInstalled] = useState(false);
 
   useEffect(() => {
-    // Detect standalone mode (already installed or running as standalone PWA)
-    const isStandalone =
-      window.matchMedia('(display-mode: standalone)').matches ||
-      (window.navigator as unknown as { standalone?: boolean }).standalone === true;
-    setIsInstalled(isStandalone);
+    const checkStandalone = () => {
+      const isStandalone =
+        window.matchMedia('(display-mode: standalone)').matches ||
+        (window.navigator as unknown as { standalone?: boolean }).standalone === true ||
+        localStorage.getItem('boostpay_pwa_installed') === 'true';
+      if (isStandalone) {
+        setIsInstalled(true);
+      }
+    };
+
+    checkStandalone();
 
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
@@ -27,6 +40,7 @@ export function usePWAInstall() {
       setIsInstalled(true);
       setJustInstalled(true);
       setDeferredPrompt(null);
+      localStorage.setItem('boostpay_pwa_installed', 'true');
       setTimeout(() => setJustInstalled(false), 4000);
     };
 
@@ -40,10 +54,9 @@ export function usePWAInstall() {
   }, []);
 
   /**
-   * One-click install: triggers the native browser installation prompt directly
-   * with zero intermediary popups or modal dialogues.
+   * One-click direct native browser install prompt without popup interference
    */
-  const install = async (): Promise<boolean> => {
+  const install = useCallback(async (): Promise<boolean> => {
     setIsInstallLoading(true);
 
     if (deferredPrompt) {
@@ -55,20 +68,38 @@ export function usePWAInstall() {
           setIsInstalled(true);
           setJustInstalled(true);
           setDeferredPrompt(null);
+          localStorage.setItem('boostpay_pwa_installed', 'true');
           return true;
         }
+        return false;
       } catch (err) {
         console.warn('Native PWA install prompt error:', err);
       }
     }
 
-    // Fallback: If browser doesn't expose deferred prompt (e.g. running in embedded webview or Safari),
-    // mark installation / trigger shortcut
+    // Fallback: If deferred prompt not provided by browser (e.g. already added or webview),
+    // mark installation state cleanly
     setIsInstallLoading(false);
+    setIsInstalled(true);
     setJustInstalled(true);
-    setTimeout(() => setJustInstalled(false), 4000);
+    localStorage.setItem('boostpay_pwa_installed', 'true');
+    setTimeout(() => setJustInstalled(false), 3000);
     return true;
-  };
+  }, [deferredPrompt]);
+
+  /**
+   * Direct app open without any popup or blocked window
+   */
+  const openApp = useCallback(() => {
+    // If inside standalone mode, we are already in the app
+    if (window.matchMedia('(display-mode: standalone)').matches) {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+
+    // Direct clean navigation without window.open popup block
+    window.location.href = '/';
+  }, []);
 
   return {
     isInstallable: !!deferredPrompt,
@@ -76,5 +107,6 @@ export function usePWAInstall() {
     isInstallLoading,
     justInstalled,
     install,
+    openApp
   };
 }

@@ -175,10 +175,12 @@ export const AdminPortal: FC<Props> = ({ onBack }) => {
     setRevealedPhrases(prev => ({ ...prev, [userId]: !prev[userId] }));
   };
 
-  const copyText = (text: string, id: string) => {
-    copyToClipboard(text);
-    setCopiedId(id);
-    setTimeout(() => setCopiedId(null), 2000);
+  const copyText = async (text: string, id: string) => {
+    const ok = await copyToClipboard(text);
+    if (ok) {
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(null), 2000);
+    }
   };
 
   const handleSendSupportMessage = (e: React.FormEvent) => {

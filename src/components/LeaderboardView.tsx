@@ -1,29 +1,43 @@
-import { FC, useState } from 'react';
+import { FC, useState, useEffect } from 'react';
 import { Trophy, MessageSquare, ShieldAlert, TrendingUp, Copy, Check, Sparkles, Award } from 'lucide-react';
 import { BoostPayStore, copyToClipboard } from '../services/store';
 import { User } from '../types';
 
 interface Props {
-  currentUser: User;
+  currentUser?: User;
+  currentUserId?: string;
   onSelectPeerForChat: (peerId: string) => void;
 }
 
-export const LeaderboardView: FC<Props> = ({ currentUser, onSelectPeerForChat }) => {
-  const [users] = useState<User[]>(() => {
+export const LeaderboardView: FC<Props> = ({ currentUser: userProp, currentUserId, onSelectPeerForChat }) => {
+  const [users, setUsers] = useState<User[]>(() => {
     const all = BoostPayStore.getUsers();
-    // Sort descending by balance, secondary sort by lifetimeProfit
     return [...all].sort((a, b) => b.balance - a.balance || b.lifetimeProfit - a.lifetimeProfit);
   });
 
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  const copyId = (id: string) => {
-    copyToClipboard(id);
-    setCopiedId(id);
-    setTimeout(() => setCopiedId(null), 2000);
+  useEffect(() => {
+    const all = BoostPayStore.getUsers();
+    setUsers([...all].sort((a, b) => b.balance - a.balance || b.lifetimeProfit - a.lifetimeProfit));
+  }, []);
+
+  const effectiveUserId = userProp?.id || currentUserId || '';
+  const myUser = users.find(u => u.id === effectiveUserId) || userProp || {
+    id: effectiveUserId,
+    balance: 0,
+    lifetimeProfit: 0
   };
 
-  const currentUserRank = users.findIndex(u => u.id === currentUser.id) + 1;
+  const copyId = async (id: string) => {
+    const ok = await copyToClipboard(id);
+    if (ok) {
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(null), 2000);
+    }
+  };
+
+  const currentUserRank = users.findIndex(u => u.id === effectiveUserId) + 1;
 
   const getRankBadge = (rank: number) => {
     if (rank === 1) {
@@ -83,7 +97,7 @@ export const LeaderboardView: FC<Props> = ({ currentUser, onSelectPeerForChat })
                 Your Current Standing
               </span>
               <div className="flex items-center gap-2 mt-0.5">
-                <span className="text-sm font-bold text-white font-mono">#{currentUser.id}</span>
+                <span className="text-sm font-bold text-white font-mono">#{myUser.id}</span>
                 <span className="text-[11px] text-zinc-400">(You)</span>
               </div>
             </div>
@@ -92,11 +106,11 @@ export const LeaderboardView: FC<Props> = ({ currentUser, onSelectPeerForChat })
           <div className="flex items-center gap-6 self-start sm:self-center font-mono">
             <div>
               <span className="text-[10px] text-zinc-500 block">Balance</span>
-              <span className="text-sm font-bold text-white">${currentUser.balance.toFixed(4)}</span>
+              <span className="text-sm font-bold text-white">${myUser.balance.toFixed(4)}</span>
             </div>
             <div>
               <span className="text-[10px] text-zinc-500 block">Lifetime Profit</span>
-              <span className="text-sm font-bold text-emerald-400">+${currentUser.lifetimeProfit.toFixed(4)}</span>
+              <span className="text-sm font-bold text-emerald-400">+${myUser.lifetimeProfit.toFixed(4)}</span>
             </div>
           </div>
         </div>
@@ -124,7 +138,7 @@ export const LeaderboardView: FC<Props> = ({ currentUser, onSelectPeerForChat })
         <div className="space-y-2.5">
           {users.map((u, idx) => {
             const rank = idx + 1;
-            const isMe = u.id === currentUser.id;
+            const isMe = u.id === effectiveUserId;
 
             return (
               <div

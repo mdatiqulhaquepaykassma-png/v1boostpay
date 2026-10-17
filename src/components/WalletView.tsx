@@ -1,5 +1,5 @@
 import { FC, useState, useEffect, useRef } from 'react';
-import { Zap, Pause, Play, Send, TrendingUp, AlertCircle, Sparkles } from 'lucide-react';
+import { Zap, Pause, Play, Send, TrendingUp, AlertCircle, Sparkles, RefreshCw } from 'lucide-react';
 import { BoostPayStore } from '../services/store';
 import { User, SystemConfig } from '../types';
 import { RecentTransactionsSection } from './RecentTransactionsSection';
@@ -21,147 +21,104 @@ export const WalletView: FC<Props> = ({
   const [completionBanner, setCompletionBanner] = useState<{ amount: number } | null>(null);
 
   // Live session yield ticker state
-  const [liveYield, setLiveYield] = useState(user.boostState.accumulatedYield);
-  const [elapsedMs, setElapsedMs] = useState(user.boostState.elapsedMs);
+  const [liveYield, setLiveYield] = useState(user.boostState.accumulatedYield || 0);
+  const [elapsedMs, setElapsedMs] = useState(user.boostState.elapsedMs || 0);
 
-  const elapsedMsRef = useRef(user.boostState.elapsedMs);
-  const timerRef = useRef<number | null>(null);
+  const prevBalanceRef = useRef(user.balance);
 
+  // Synchronize with user prop changes
   useEffect(() => {
-    elapsedMsRef.current = user.boostState.elapsedMs;
-    setLiveYield(user.boostState.accumulatedYield);
-    setElapsedMs(user.boostState.elapsedMs);
-  }, [user.boostState.elapsedMs, user.boostState.accumulatedYield]);
+    setLiveYield(user.boostState.accumulatedYield || 0);
+    setElapsedMs(user.boostState.elapsedMs || 0);
 
-  // Recalculate dynamic target duration
+    // If balance increased due to reward credit while app was in background or reloaded
+    if (user.balance > prevBalanceRef.current && !user.boostState.isActive) {
+      const diff = user.balance - prevBalanceRef.current;
+      setCompletionBanner({ amount: diff });
+    }
+    prevBalanceRef.current = user.balance;
+  }, [user.boostState.elapsedMs, user.boostState.accumulatedYield, user.balance, user.boostState.isActive]);
+
+  // Dynamic target duration calculation:
+  // "jar balance sobcheye besi tar 24 gonta , jar balance kom tar min 1 min"
   const allUsers = BoostPayStore.getUsers();
-  const dynamicTargetDurationMs = BoostPayStore.calculateDynamicDuration(user.balance, allUsers);
+  const dynamicTargetDurationMs = user.boostState.targetDurationMs || BoostPayStore.calculateDynamicDuration(user.balance, allUsers);
 
-  // Compounding calculation rate per millisecond
-  const ratePerMs = (config.hourlyRatePercent / 100) / 3600000;
-
-  const handleCycleCompletion = (finalYield: number) => {
-    const freshUsers = BoostPayStore.getUsers();
-    const target = freshUsers.find(u => u.id === user.id);
-    if (!target) return;
-
-    target.balance += finalYield;
-    target.lifetimeProfit += finalYield;
-    target.boostState = {
-      isActive: false,
-      isPaused: false,
-      startedAt: 0,
-      pausedAt: 0,
-      elapsedMs: 0,
-      targetDurationMs: BoostPayStore.calculateDynamicDuration(target.balance, freshUsers),
-      startingBalance: target.balance,
-      accumulatedYield: 0
+  // 1-second continuous server synchronization
+  // Keeps server state authoritative even if user goes offline, reloads, or closes tab!
+  useEffect(() => {
+    const syncWithServer = async () => {
+      const freshUser = await BoostPayStore.syncUserFromServer(user.id);
+      if (freshUser) {
+        onUpdateUser(freshUser);
+      }
     };
 
-    BoostPayStore.addTransaction({
-      userId: target.id,
-      type: 'REWARD',
-      amount: finalYield,
-      notes: `Compounding cycle reward completed`
-    });
+    // Run every 1 second when boost is active, or every 4 seconds when idle
+    const intervalTime = (user.boostState.isActive && !user.boostState.isPaused) ? 1000 : 4000;
+    const interval = setInterval(syncWithServer, intervalTime);
 
-    BoostPayStore.saveUsers(freshUsers);
-    BoostPayStore.setCurrentUser(target);
-    onUpdateUser({ ...target });
-    setCompletionBanner({ amount: finalYield });
-    setLiveYield(0);
-    setElapsedMs(0);
-    elapsedMsRef.current = 0;
-  };
+    return () => clearInterval(interval);
+  }, [user.id, user.boostState.isActive, user.boostState.isPaused, onUpdateUser]);
 
-  // Running boost effect
+  // Client-side smooth interpolation ticker for ultra-smooth UI increments
   useEffect(() => {
     const isRunning = user.boostState.isActive && !user.boostState.isPaused;
+    if (!isRunning) return;
 
-    if (isRunning) {
-      const interval = window.setInterval(() => {
-        elapsedMsRef.current += 50;
-        const currentElapsed = elapsedMsRef.current;
-        const accrued = user.balance * (Math.pow(1 + ratePerMs, currentElapsed) - 1);
-
-        if (currentElapsed >= dynamicTargetDurationMs) {
-          clearInterval(interval);
-          handleCycleCompletion(accrued);
-        } else {
-          setElapsedMs(currentElapsed);
-          setLiveYield(accrued);
+    const ratePerMs = (config.hourlyRatePercent / 100) / 3600000;
+    const ticker = setInterval(() => {
+      setElapsedMs((prev) => {
+        const next = prev + 100;
+        const target = user.boostState.targetDurationMs || dynamicTargetDurationMs;
+        if (next >= target) {
+          // Sync with server immediately to capture final completed reward
+          BoostPayStore.syncUserFromServer(user.id).then((fresh) => {
+            if (fresh) onUpdateUser(fresh);
+          });
+          return target;
         }
-      }, 50);
+        const startingBal = Number(user.boostState.startingBalance ?? user.balance);
+        const accrued = startingBal * (Math.pow(1 + ratePerMs, next) - 1);
+        setLiveYield(accrued);
+        return next;
+      });
+    }, 100);
 
-      timerRef.current = interval;
-      return () => clearInterval(interval);
-    } else {
-      if (timerRef.current) clearInterval(timerRef.current);
-    }
-  }, [user.boostState.isActive, user.boostState.isPaused, user.balance, dynamicTargetDurationMs, ratePerMs]);
+    return () => clearInterval(ticker);
+  }, [user.boostState.isActive, user.boostState.isPaused, user.balance, user.boostState.startingBalance, user.boostState.targetDurationMs, dynamicTargetDurationMs, config.hourlyRatePercent, user.id, onUpdateUser]);
 
-  const handleStartBoost = () => {
+  const handleStartBoost = async () => {
     if (user.balance <= 0) {
       setZeroBalanceWarning(true);
       setTimeout(() => setZeroBalanceWarning(false), 3500);
       return;
     }
 
-    const freshUsers = BoostPayStore.getUsers();
-    const target = freshUsers.find(u => u.id === user.id);
-    if (!target) return;
-
-    const targetDuration = BoostPayStore.calculateDynamicDuration(target.balance, freshUsers);
-
-    target.boostState = {
-      isActive: true,
-      isPaused: false,
-      startedAt: Date.now(),
-      pausedAt: 0,
-      elapsedMs: 0,
-      targetDurationMs: targetDuration,
-      startingBalance: target.balance,
-      accumulatedYield: 0
-    };
-
-    BoostPayStore.saveUsers(freshUsers);
-    BoostPayStore.setCurrentUser(target);
-    onUpdateUser({ ...target });
-    setElapsedMs(0);
-    setLiveYield(0);
-    elapsedMsRef.current = 0;
+    const updatedUser = await BoostPayStore.startServerBoost(user.id);
+    if (updatedUser) {
+      onUpdateUser(updatedUser);
+      setElapsedMs(0);
+      setLiveYield(0);
+    }
   };
 
-  const handlePauseBoost = () => {
-    const freshUsers = BoostPayStore.getUsers();
-    const target = freshUsers.find(u => u.id === user.id);
-    if (!target) return;
-
-    target.boostState.isPaused = true;
-    target.boostState.pausedAt = Date.now();
-    target.boostState.elapsedMs = elapsedMsRef.current;
-    target.boostState.accumulatedYield = liveYield;
-
-    BoostPayStore.saveUsers(freshUsers);
-    BoostPayStore.setCurrentUser(target);
-    onUpdateUser({ ...target });
+  const handlePauseBoost = async () => {
+    const updatedUser = await BoostPayStore.pauseServerBoost(user.id);
+    if (updatedUser) {
+      onUpdateUser(updatedUser);
+    }
   };
 
-  const handleResumeBoost = () => {
-    const freshUsers = BoostPayStore.getUsers();
-    const target = freshUsers.find(u => u.id === user.id);
-    if (!target) return;
-
-    target.boostState.isPaused = false;
-    target.boostState.startedAt = Date.now() - target.boostState.elapsedMs;
-
-    BoostPayStore.saveUsers(freshUsers);
-    BoostPayStore.setCurrentUser(target);
-    onUpdateUser({ ...target });
+  const handleResumeBoost = async () => {
+    const updatedUser = await BoostPayStore.resumeServerBoost(user.id);
+    if (updatedUser) {
+      onUpdateUser(updatedUser);
+    }
   };
 
   const formatDuration = (ms: number): string => {
-    const totalSecs = Math.floor(ms / 1000);
+    const totalSecs = Math.max(0, Math.floor(ms / 1000));
     const hours = Math.floor(totalSecs / 3600);
     const minutes = Math.floor((totalSecs % 3600) / 60);
     const seconds = totalSecs % 60;
@@ -169,7 +126,10 @@ export const WalletView: FC<Props> = ({
     if (hours > 0) {
       return `${hours}h ${minutes}m ${seconds}s`;
     }
-    return `${minutes}m ${seconds}s`;
+    if (minutes > 0) {
+      return `${minutes}m ${seconds}s`;
+    }
+    return `${seconds}s`;
   };
 
   const isBoostRunning = user.boostState.isActive && !user.boostState.isPaused;
@@ -181,7 +141,7 @@ export const WalletView: FC<Props> = ({
   const [intPart, decPart] = balanceStr.split('.');
 
   // Profit calculations
-  const allTxs = BoostPayStore.getTransactions().filter(t => t.userId === user.id && t.type === 'REWARD');
+  const allTxs = BoostPayStore.getTransactions().filter(t => t.userId === user.id && (t.type === 'REWARD' || t.type === 'ADMIN_CREDIT'));
   const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
   const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
 
@@ -197,17 +157,17 @@ export const WalletView: FC<Props> = ({
     <div className="w-full px-4 py-4 space-y-4">
       {/* Auto-credit completion banner */}
       {completionBanner && (
-        <div className="rounded-2xl border border-emerald-500/30 bg-emerald-950/40 p-3.5 flex items-center justify-between shadow-lg animate-in slide-in-from-top">
+        <div className="rounded-2xl border border-emerald-500/30 bg-emerald-950/50 p-3.5 flex items-center justify-between shadow-lg animate-in slide-in-from-top duration-300">
           <div className="flex items-center gap-2.5">
             <Sparkles className="w-4 h-4 text-emerald-400 shrink-0" />
             <div className="text-xs text-zinc-200">
-              <span className="font-bold text-emerald-400 block">Reward Credited!</span>
+              <span className="font-bold text-emerald-400 block">Boosting Completed!</span>
               +${completionBanner.amount.toFixed(6)} USD added to main balance.
             </div>
           </div>
           <button
             onClick={() => setCompletionBanner(null)}
-            className="text-xs text-zinc-400 hover:text-white px-2 py-1"
+            className="text-xs text-zinc-400 hover:text-white px-2 py-1 cursor-pointer"
           >
             ✕
           </button>
@@ -228,7 +188,10 @@ export const WalletView: FC<Props> = ({
       <div className="rounded-3xl border border-zinc-800 bg-zinc-900/90 p-5 shadow-xl relative overflow-hidden">
         <div className="flex items-center justify-between text-xs text-zinc-400 mb-1">
           <span className="font-medium tracking-wide">Main Balance</span>
-          <span className="text-[11px] font-mono text-zinc-500">Available Funds</span>
+          <span className="text-[11px] font-mono text-zinc-500 flex items-center gap-1">
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+            Realtime 24/7 Server Sync
+          </span>
         </div>
 
         {/* Large Decimals Display */}
@@ -247,7 +210,7 @@ export const WalletView: FC<Props> = ({
         <div className="mt-4">
           <button
             onClick={onOpenSendMoney}
-            className={`w-full h-11 rounded-2xl text-xs font-bold transition flex items-center justify-center gap-2 ${
+            className={`w-full h-11 rounded-2xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer ${
               isBoostRunning
                 ? 'border border-zinc-800 bg-zinc-950 text-zinc-500 cursor-not-allowed'
                 : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-100 border border-zinc-700/80 active:scale-[0.98]'
@@ -259,7 +222,7 @@ export const WalletView: FC<Props> = ({
         </div>
       </div>
 
-      {/* Compounding Yield Card */}
+      {/* Dynamic Compounding Yield Card */}
       <div className="rounded-3xl border border-zinc-800 bg-zinc-900/90 p-5 shadow-xl relative">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
@@ -269,13 +232,13 @@ export const WalletView: FC<Props> = ({
             <div>
               <h3 className="font-bold text-sm text-white">Dynamic Compounding</h3>
               <p className="text-[11px] text-zinc-400">
-                Rate: <span className="font-mono text-amber-400">{config.hourlyRatePercent}%/hr</span> · Cycle: <span className="font-mono text-zinc-300">{formatDuration(dynamicTargetDurationMs)}</span>
+                Rate: <span className="font-mono text-amber-400">{config.hourlyRatePercent}%/hr</span> · Duration: <span className="font-mono text-zinc-300">{formatDuration(dynamicTargetDurationMs)}</span>
               </p>
             </div>
           </div>
           {isBoostRunning && (
             <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-mono text-amber-400 font-bold">
-              ACTIVE
+              ACTIVE (24/7)
             </span>
           )}
           {isBoostPaused && (
@@ -319,21 +282,21 @@ export const WalletView: FC<Props> = ({
           {!user.boostState.isActive ? (
             <button
               onClick={handleStartBoost}
-              className="w-full h-11 rounded-2xl bg-amber-500 text-xs font-bold text-zinc-950 hover:bg-amber-400 active:scale-[0.98] transition flex items-center justify-center gap-1.5"
+              className="w-full h-11 rounded-2xl bg-amber-500 text-xs font-bold text-zinc-950 hover:bg-amber-400 active:scale-[0.98] transition flex items-center justify-center gap-1.5 cursor-pointer shadow-md shadow-amber-500/20"
             >
               <Zap className="w-4 h-4 fill-current" /> Start Compounding
             </button>
           ) : isBoostPaused ? (
             <button
               onClick={handleResumeBoost}
-              className="w-full h-11 rounded-2xl bg-amber-500 text-xs font-bold text-zinc-950 hover:bg-amber-400 active:scale-[0.98] transition flex items-center justify-center gap-1.5"
+              className="w-full h-11 rounded-2xl bg-amber-500 text-xs font-bold text-zinc-950 hover:bg-amber-400 active:scale-[0.98] transition flex items-center justify-center gap-1.5 cursor-pointer shadow-md shadow-amber-500/20"
             >
               <Play className="w-4 h-4 fill-current" /> Resume Compounding
             </button>
           ) : (
             <button
               onClick={handlePauseBoost}
-              className="w-full h-11 rounded-2xl border border-zinc-700 bg-zinc-800 text-xs font-semibold text-zinc-200 hover:bg-zinc-750 active:scale-[0.98] transition flex items-center justify-center gap-1.5"
+              className="w-full h-11 rounded-2xl border border-zinc-700 bg-zinc-800 text-xs font-semibold text-zinc-200 hover:bg-zinc-750 active:scale-[0.98] transition flex items-center justify-center gap-1.5 cursor-pointer"
             >
               <Pause className="w-4 h-4" /> Pause (Unlocks Transfers)
             </button>

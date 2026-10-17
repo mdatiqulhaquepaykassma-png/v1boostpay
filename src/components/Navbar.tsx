@@ -12,11 +12,13 @@ interface Props {
 export const Navbar: FC<Props> = ({ user, isAdmin, onLogout }) => {
   const [copied, setCopied] = useState(false);
 
-  const copyId = () => {
+  const copyId = async () => {
     if (!user) return;
-    copyToClipboard(user.id);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    const ok = await copyToClipboard(user.id);
+    if (ok) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
   };
 
   return (

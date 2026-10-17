@@ -8,24 +8,15 @@ interface Props {
 }
 
 export const InstallButton: FC<Props> = ({ variant = 'compact', className = '' }) => {
-  const { isInstalled, isInstallLoading, justInstalled, install } = usePWAInstall();
-
-  const handleOpenApp = () => {
-    // Open app cleanly without popups or fallback to window focus
-    try {
-      window.open(window.location.origin, '_blank');
-    } catch {
-      window.location.href = '/';
-    }
-  };
+  const { isInstalled, isInstallLoading, justInstalled, install, openApp } = usePWAInstall();
 
   if (isInstalled && !justInstalled) {
     return (
       <button
-        onClick={handleOpenApp}
+        onClick={openApp}
         aria-label="Open BoostPay App"
         className={`inline-flex items-center gap-1.5 rounded-xl border border-emerald-500/40 bg-emerald-950/40 px-3 py-1.5 text-xs font-bold text-emerald-400 hover:bg-emerald-900/50 transition cursor-pointer ${className}`}
-        title="Open installed BoostPay app"
+        title="Open BoostPay app"
       >
         <ExternalLink className="w-3.5 h-3.5" />
         <span>Open</span>
@@ -36,8 +27,9 @@ export const InstallButton: FC<Props> = ({ variant = 'compact', className = '' }
   if (justInstalled) {
     return (
       <button
-        onClick={handleOpenApp}
+        onClick={openApp}
         className={`inline-flex items-center gap-1.5 rounded-xl border border-emerald-500/50 bg-emerald-500/20 px-3 py-1.5 text-xs font-bold text-emerald-300 animate-in fade-in duration-200 cursor-pointer ${className}`}
+        title="Open BoostPay app"
       >
         <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
         <span>Open</span>

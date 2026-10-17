@@ -10,6 +10,10 @@ const __dirname = path.dirname(__filename);
 const DATA_DIR = path.join(__dirname, 'data');
 const DB_FILE = path.join(DATA_DIR, 'boostpay_db.json');
 
+// Server startup version for update/deployment detection
+const SERVER_BOOT_TIME = Date.now();
+const SERVER_VERSION = `v1.2.${Math.floor(SERVER_BOOT_TIME / 1000)}`;
+
 // Ensure data directory and initial database file exists
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -50,8 +54,8 @@ const INITIAL_DB = {
   messages: [],
   config: {
     hourlyRatePercent: 1.0,
-    minBoostMs: 60000,
-    maxBoostMs: 86400000,
+    minBoostMs: 60000, // 1 minute minimum
+    maxBoostMs: 86400000, // 24 hours maximum
     dokploy: {
       host: "boostpay-eoqehk",
       port: 5432,
@@ -72,7 +76,13 @@ function readDb() {
       return INITIAL_DB;
     }
     const raw = fs.readFileSync(DB_FILE, 'utf-8');
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    if (!parsed.users) parsed.users = INITIAL_DB.users;
+    if (!parsed.transactions) parsed.transactions = INITIAL_DB.transactions;
+    if (!parsed.conversations) parsed.conversations = [];
+    if (!parsed.messages) parsed.messages = [];
+    if (!parsed.config) parsed.config = INITIAL_DB.config;
+    return parsed;
   } catch (err) {
     console.error('Error reading db file:', err);
     return INITIAL_DB;
@@ -92,29 +102,37 @@ function writeDb(data: any) {
 // Initial bootstrap check
 readDb();
 
-// Helper to calculate dynamic duration
+/**
+ * Dynamic duration formula:
+ * jar balance sobcheye besi tar 24 gonta (86,400,000 ms)
+ * jar balance kom tar min 1 min (60,000 ms)
+ */
 function calculateDynamicDuration(userBalance: number, users: any[], config: any): number {
-  const minMs = config.minBoostMs || 60000;
-  const maxMs = config.maxBoostMs || 86400000;
+  const minMs = config?.minBoostMs || 60000; // 1 min
+  const maxMs = config?.maxBoostMs || 86400000; // 24 hours
 
-  if (users.length <= 1) {
-    return userBalance >= 1000 ? maxMs : Math.max(minMs, Math.min(maxMs, (userBalance / 1000) * maxMs));
+  const numBal = Number(userBalance) || 0;
+  if (!users || users.length <= 1) {
+    if (numBal <= 0) return minMs;
+    if (numBal >= 1000) return maxMs;
+    return Math.round(minMs + (numBal / 1000) * (maxMs - minMs));
   }
 
-  const balances = users.map(u => u.balance);
+  const balances = users.map((u: any) => Number(u.balance) || 0);
   const minBal = Math.min(...balances);
   const maxBal = Math.max(...balances);
 
   if (maxBal === minBal) {
-    return userBalance > 0 ? (minMs + maxMs) / 2 : minMs;
+    return numBal > 0 ? maxMs : minMs;
   }
 
-  const clamped = Math.max(minBal, Math.min(maxBal, userBalance));
+  const clamped = Math.max(minBal, Math.min(maxBal, numBal));
   const ratio = (clamped - minBal) / (maxBal - minBal);
   return Math.round(minMs + ratio * (maxMs - minMs));
 }
 
-// Background server-side boosting ticker (runs every 1 second)
+// Background server-side boosting ticker (runs continuously every 1 second 24/7)
+// Even if the user is offline, closes the app, or logs out, this ticker runs and credits rewards!
 setInterval(() => {
   try {
     const db = readDb();
@@ -130,22 +148,28 @@ setInterval(() => {
         }
 
         const elapsed = now - user.boostState.startedAt;
-        const target = user.boostState.targetDurationMs || 86400000;
+        const target = user.boostState.targetDurationMs || calculateDynamicDuration(user.balance, db.users, config);
 
         if (elapsed >= target) {
           // Cycle completed on server!
-          const finalYield = user.balance * (Math.pow(1 + ratePerMs, target) - 1);
-          user.balance += finalYield;
-          user.lifetimeProfit += finalYield;
+          const startingBal = Number(user.boostState.startingBalance ?? user.balance);
+          const finalYield = startingBal * (Math.pow(1 + ratePerMs, target) - 1);
+          
+          user.balance = (Number(user.balance) || 0) + finalYield;
+          user.lifetimeProfit = (Number(user.lifetimeProfit) || 0) + finalYield;
 
-          db.transactions.unshift({
+          const rewardTx = {
             id: 'TX-' + Math.floor(10000000 + Math.random() * 90000000),
             userId: user.id,
             type: 'REWARD',
             amount: finalYield,
             timestamp: now,
             notes: 'Server background compounding reward completed'
-          });
+          };
+          db.transactions.unshift(rewardTx);
+
+          // Calculate new duration based on latest balance
+          const nextDuration = calculateDynamicDuration(user.balance, db.users, config);
 
           user.boostState = {
             isActive: false,
@@ -153,14 +177,16 @@ setInterval(() => {
             startedAt: 0,
             pausedAt: 0,
             elapsedMs: 0,
-            targetDurationMs: calculateDynamicDuration(user.balance, db.users, config),
+            targetDurationMs: nextDuration,
             startingBalance: user.balance,
-            accumulatedYield: 0
+            accumulatedYield: 0,
+            justCompletedReward: finalYield
           };
           updated = true;
         } else {
           user.boostState.elapsedMs = elapsed;
-          user.boostState.accumulatedYield = user.balance * (Math.pow(1 + ratePerMs, elapsed) - 1);
+          const startingBal = Number(user.boostState.startingBalance ?? user.balance);
+          user.boostState.accumulatedYield = startingBal * (Math.pow(1 + ratePerMs, elapsed) - 1);
           updated = true;
         }
       }
@@ -180,26 +206,194 @@ async function startServer() {
 
   app.use(express.json({ limit: '10mb' }));
 
-  // API endpoints
-  app.get('/api/health', (_req, res) => {
-    res.json({ status: 'ok', timestamp: Date.now() });
+  // 1. Version / Deployment Detection endpoint
+  app.get('/api/version', (_req, res) => {
+    res.json({
+      version: SERVER_VERSION,
+      bootTime: SERVER_BOOT_TIME,
+      timestamp: Date.now()
+    });
   });
 
+  // 2. Health check
+  app.get('/api/health', (_req, res) => {
+    res.json({ status: 'ok', version: SERVER_VERSION, timestamp: Date.now() });
+  });
+
+  // 3. Database snapshot
   app.get('/api/db', (_req, res) => {
     const db = readDb();
     res.json(db);
   });
 
+  // 4. Single-user fetch endpoint (fast, keeps session synced without large payload)
+  app.get('/api/users/:id', (req, res) => {
+    const db = readDb();
+    const user = db.users.find((u: any) => u.id === req.params.id);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    const userTxs = db.transactions.filter((t: any) => t.userId === user.id);
+    res.json({ user, transactions: userTxs });
+  });
+
+  // 5. User registration endpoint
+  app.post('/api/users/register', (req, res) => {
+    try {
+      const { id, phrase, password } = req.body;
+      const db = readDb();
+      
+      let userId = id;
+      if (!userId) {
+        userId = Math.floor(100000 + Math.random() * 900000).toString();
+        while (db.users.some((u: any) => u.id === userId)) {
+          userId = Math.floor(100000 + Math.random() * 900000).toString();
+        }
+      }
+
+      const existing = db.users.find((u: any) => u.id === userId || (phrase && u.phrase === phrase.trim().toLowerCase()));
+      if (existing) {
+        return res.status(400).json({ error: 'User already exists' });
+      }
+
+      const initialDuration = calculateDynamicDuration(0, db.users, db.config);
+      const newUser = {
+        id: userId,
+        balance: 0,
+        lifetimeProfit: 0,
+        phrase: (phrase || '').trim().toLowerCase(),
+        password: (password || '').trim(),
+        createdAt: Date.now(),
+        boostState: {
+          isActive: false,
+          isPaused: false,
+          startedAt: 0,
+          pausedAt: 0,
+          elapsedMs: 0,
+          targetDurationMs: initialDuration,
+          startingBalance: 0,
+          accumulatedYield: 0
+        }
+      };
+
+      db.users.push(newUser);
+      writeDb(db);
+      res.json({ success: true, user: newUser });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 6. Direct Server-Side Boost Endpoints (authoritative state!)
+  app.post('/api/boost/start', (req, res) => {
+    try {
+      const { userId } = req.body;
+      const db = readDb();
+      const user = db.users.find((u: any) => u.id === userId);
+      if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      if (Number(user.balance) <= 0) {
+        return res.status(400).json({ error: 'Cannot boost with zero balance' });
+      }
+
+      const targetDuration = calculateDynamicDuration(user.balance, db.users, db.config);
+      user.boostState = {
+        isActive: true,
+        isPaused: false,
+        startedAt: Date.now(),
+        pausedAt: 0,
+        elapsedMs: 0,
+        targetDurationMs: targetDuration,
+        startingBalance: user.balance,
+        accumulatedYield: 0
+      };
+
+      writeDb(db);
+      res.json({ success: true, user });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/boost/pause', (req, res) => {
+    try {
+      const { userId } = req.body;
+      const db = readDb();
+      const user = db.users.find((u: any) => u.id === userId);
+      if (!user || !user.boostState) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      user.boostState.isPaused = true;
+      user.boostState.pausedAt = Date.now();
+      writeDb(db);
+      res.json({ success: true, user });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/boost/resume', (req, res) => {
+    try {
+      const { userId } = req.body;
+      const db = readDb();
+      const user = db.users.find((u: any) => u.id === userId);
+      if (!user || !user.boostState) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      user.boostState.isPaused = false;
+      user.boostState.startedAt = Date.now() - (user.boostState.elapsedMs || 0);
+      user.boostState.pausedAt = 0;
+      writeDb(db);
+      res.json({ success: true, user });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/boost/status/:userId', (req, res) => {
+    const db = readDb();
+    const user = db.users.find((u: any) => u.id === req.params.userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    res.json({
+      user,
+      boostState: user.boostState,
+      balance: user.balance,
+      lifetimeProfit: user.lifetimeProfit
+    });
+  });
+
+  // 7. General sync endpoint
   app.post('/api/sync', (req, res) => {
     try {
       const incoming = req.body;
       const current = readDb();
 
-      const usersToSave = Array.isArray(incoming.users) && incoming.users.length > 0
-        ? incoming.users
-        : current.users;
+      // Merge users safely rather than blind overwrite
+      let mergedUsers = [...current.users];
+      if (Array.isArray(incoming.users)) {
+        for (const incUser of incoming.users) {
+          const idx = mergedUsers.findIndex(u => u.id === incUser.id);
+          if (idx >= 0) {
+            // Preserve active server boostState if running on server
+            const serverBoost = mergedUsers[idx].boostState;
+            mergedUsers[idx] = {
+              ...incUser,
+              boostState: (serverBoost && serverBoost.isActive) ? serverBoost : incUser.boostState,
+              balance: Math.max(mergedUsers[idx].balance, incUser.balance)
+            };
+          } else {
+            mergedUsers.push(incUser);
+          }
+        }
+      }
 
-      const transactionsToSave = Array.isArray(incoming.transactions)
+      const transactionsToSave = Array.isArray(incoming.transactions) && incoming.transactions.length > 0
         ? incoming.transactions
         : current.transactions;
 
@@ -214,7 +408,7 @@ async function startServer() {
       const configToSave = incoming.config || current.config;
 
       const updatedDb = {
-        users: usersToSave,
+        users: mergedUsers,
         transactions: transactionsToSave,
         conversations: conversationsToSave,
         messages: messagesToSave,
@@ -222,13 +416,18 @@ async function startServer() {
       };
 
       writeDb(updatedDb);
-      res.json({ success: true, count: usersToSave.length });
+      res.json({ success: true, count: mergedUsers.length });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
 
-  // Full-Stack Admin API endpoints
+  // 8. Full-Stack Admin API endpoints (Completely decoupled from user sessions)
+  app.get('/api/admin/users', (_req, res) => {
+    const db = readDb();
+    res.json({ users: db.users, config: db.config });
+  });
+
   app.post('/api/admin/adjust', (req, res) => {
     try {
       const { userId, type, amount, notes } = req.body;
@@ -244,7 +443,7 @@ async function startServer() {
       }
 
       if (type === 'CREDIT') {
-        user.balance += numAmount;
+        user.balance = (Number(user.balance) || 0) + numAmount;
         db.transactions.unshift({
           id: 'TX-' + Math.floor(10000000 + Math.random() * 90000000),
           userId: user.id,
@@ -254,7 +453,7 @@ async function startServer() {
           notes: notes || 'Admin Treasury Credit'
         });
       } else if (type === 'DEBIT') {
-        user.balance = Math.max(0, user.balance - numAmount);
+        user.balance = Math.max(0, (Number(user.balance) || 0) - numAmount);
         db.transactions.unshift({
           id: 'TX-' + Math.floor(10000000 + Math.random() * 90000000),
           userId: user.id,
@@ -263,6 +462,11 @@ async function startServer() {
           timestamp: Date.now(),
           notes: notes || 'Admin Treasury Debit'
         });
+      }
+
+      // Recalculate dynamic duration for user
+      if (user.boostState && !user.boostState.isActive) {
+        user.boostState.targetDurationMs = calculateDynamicDuration(user.balance, db.users, db.config);
       }
 
       writeDb(db);
@@ -297,8 +501,11 @@ async function startServer() {
     try {
       const { hourlyRatePercent } = req.body;
       const db = readDb();
-      db.config.hourlyRatePercent = parseFloat(hourlyRatePercent);
-      writeDb(db);
+      const parsedRate = parseFloat(hourlyRatePercent);
+      if (!isNaN(parsedRate) && parsedRate >= 0) {
+        db.config.hourlyRatePercent = parsedRate;
+        writeDb(db);
+      }
       res.json({ success: true, config: db.config });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -338,7 +545,7 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`BoostPay Server listening on port ${PORT}`);
+    console.log(`BoostPay Server listening on port ${PORT} [Version: ${SERVER_VERSION}]`);
   });
 }
 

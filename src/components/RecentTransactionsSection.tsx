@@ -1,6 +1,7 @@
 import { FC, useState } from 'react';
-import { ArrowUpRight, ArrowDownLeft, Zap, ShieldAlert, X, Clock, Hash } from 'lucide-react';
+import { ArrowUpRight, ArrowDownLeft, Zap, ShieldAlert, X, Clock, Hash, Copy, Check } from 'lucide-react';
 import { Transaction } from '../types';
+import { copyToClipboard } from '../services/store';
 
 interface Props {
   transactions: Transaction[];
@@ -9,6 +10,7 @@ interface Props {
 
 export const RecentTransactionsSection: FC<Props> = ({ transactions, userId }) => {
   const [selectedTx, setSelectedTx] = useState<Transaction | null>(null);
+  const [copiedTx, setCopiedTx] = useState(false);
 
   const userTxs = transactions
     .filter(t => t.userId === userId || t.senderId === userId || t.recipientId === userId)
@@ -143,9 +145,22 @@ export const RecentTransactionsSection: FC<Props> = ({ transactions, userId }) =
             </div>
 
             <div className="space-y-2.5 text-xs font-mono">
-              <div className="flex justify-between py-1 border-b border-zinc-800/60">
+              <div className="flex justify-between items-center py-1 border-b border-zinc-800/60">
                 <span className="text-zinc-500">Transaction ID:</span>
-                <span className="text-zinc-200">{selectedTx.id}</span>
+                <button
+                  onClick={async () => {
+                    const ok = await copyToClipboard(selectedTx.id);
+                    if (ok) {
+                      setCopiedTx(true);
+                      setTimeout(() => setCopiedTx(false), 2000);
+                    }
+                  }}
+                  className="flex items-center gap-1.5 text-zinc-200 hover:text-white cursor-pointer"
+                  title="Copy Transaction ID"
+                >
+                  <span>{selectedTx.id}</span>
+                  {copiedTx ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3 text-zinc-500" />}
+                </button>
               </div>
               <div className="flex justify-between py-1 border-b border-zinc-800/60">
                 <span className="text-zinc-500">Type:</span>

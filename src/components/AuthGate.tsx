@@ -1,6 +1,6 @@
 import { FC, useState } from 'react';
 import { Shield, ArrowRight, Copy, Check, Eye, EyeOff, Lock, KeyRound, Sparkles } from 'lucide-react';
-import { BoostPayStore, generateMnemonic } from '../services/store';
+import { BoostPayStore, generateMnemonic, copyToClipboard } from '../services/store';
 import { User } from '../types';
 
 interface Props {
@@ -35,10 +35,12 @@ export const AuthGate: FC<Props> = ({ onLoginUser }) => {
     setTab('SIGNUP');
   };
 
-  const handleCopyPhrase = () => {
-    navigator.clipboard.writeText(newMnemonic);
-    setCopiedPhrase(true);
-    setTimeout(() => setCopiedPhrase(false), 2000);
+  const handleCopyPhrase = async () => {
+    const ok = await copyToClipboard(newMnemonic);
+    if (ok) {
+      setCopiedPhrase(true);
+      setTimeout(() => setCopiedPhrase(false), 2000);
+    }
   };
 
   const handleUserLogin = (e: React.FormEvent) => {
