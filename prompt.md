@@ -37,6 +37,7 @@ This document maintains the complete, chronological history of all user prompts,
 | **27** | Navbar One-Click PWA Install Button | UI & Native Prompt | Direct PWA 'Install' button in the Navbar triggering browser's native install prompt for the BoostPay app with no popups. |
 | **28** | Mobile Android Fintech Transformation | Full-Stack & UI Overhaul | Bottom nav with centered install button & Messenger; high-precision enlarged main balance decimals; admin recovery phrase & password inspection; password authentication for signup/login; dedicated `/admin` URL route; prompt.md hidden from frontend UI; full-stack Express backend with disk persistence (`data/boostpay_db.json`); eradicated AI-generated fluff ("USD Strict", fake connection chips). |
 | **29** | Leaderboard Re-Integration & Responsive Layout | Feature & Layout | Re-integrated Leaderboard with 4-tab bottom navigation (`Wallet`, `Leaderboard`, `Install`, `Messenger`); balance ranking with numeric ID, lifetime profit, and direct peer chat trigger; removed artificial mobile-only viewport frame ("no need mobile only framing") for a modern responsive design. |
+| **30** | Dokploy Nixpacks Node.js 20 Upgrade | Deployment Fix | Added `nixpacks.toml` configuration specifying Node.js 20.x LTS, Bun, and Caddy to resolve the Node.js 18 End-Of-Life build error on Dokploy. |
 
 ---
 
@@ -310,6 +311,15 @@ main balance e boosting balance realtimer show hobe na session yield e show hobe
   2. **Direct Peer Chat Action:** Each leaderboard entry features a direct **Chat** button that immediately switches to the Messenger view and focuses a conversation with that peer.
   3. **4-Tab Bottom Navigation Bar:** Reconfigured navigation with 4 balanced items: **Wallet**, **Leaderboard**, **Install**, and **Messenger**.
   4. **Responsive Layout (No Mobile-Only Framing):** Removed artificial 430px mobile device framing and fake status bar mockup per user directive ("no need mobile only framing"), allowing the app to render responsively across mobile, tablet, and desktop viewports.
+
+---
+
+### Prompt 30: Dokploy Nixpacks Node.js 20 Upgrade
+* **Deployment Error Addressed:**
+  > `error: Node.js 18.x has reached End-Of-Life and has been removed`
+* **Resolution & Implementation:**
+  - Created root `nixpacks.toml` specifying `nodejs_20`, `bun`, and `caddy`.
+  - Ensures Nixpacks builder on Dokploy correctly builds using Node.js 20.x LTS and Bun.
 
 ---
 
